@@ -20,7 +20,8 @@ Widget buildInlineMath(
   double mathFontSize = 18,
   TextStyle? textStyle,
 }) {
-  final style = textStyle ??
+  final style =
+      textStyle ??
       const TextStyle(fontSize: 16, height: 1.8, color: Colors.black87);
 
   final parts = text.split('\$');
@@ -31,17 +32,19 @@ Widget buildInlineMath(
     if (i.isEven) {
       spans.add(TextSpan(text: parts[i], style: style));
     } else {
-      spans.add(WidgetSpan(
-        alignment: PlaceholderAlignment.middle,
-        baseline: TextBaseline.alphabetic,
-        child: RaTeXWidget(
-          latex: parts[i],
-          fontSize: mathFontSize,
-          displayMode: false,
-          onError: (e) => debugPrint('RaTeX inline error: $e'),
-          loading: const SizedBox.shrink(),
+      spans.add(
+        WidgetSpan(
+          alignment: PlaceholderAlignment.middle,
+          baseline: TextBaseline.alphabetic,
+          child: RaTeXWidget(
+            latex: parts[i],
+            fontSize: mathFontSize,
+            displayMode: false,
+            onError: (e) => debugPrint('RaTeX inline error: $e'),
+            loading: const SizedBox.shrink(),
+          ),
         ),
-      ));
+      );
     }
   }
 
@@ -84,19 +87,38 @@ class _DemoPageState extends State<DemoPage> {
   bool _displayMode = true;
 
   static const _formulas = [
-    (name: 'Quadratic formula',    latex: r'\frac{-b \pm \sqrt{b^2-4ac}}{2a}'),
-    (name: "Euler's identity",     latex: r'e^{i\pi} + 1 = 0'),
-    (name: 'Gaussian integral',    latex: r'\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}'),
-    (name: 'Basel problem',        latex: r'\sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}'),
-    (name: 'Matrix',               latex: r'\begin{pmatrix}a & b \\ c & d\end{pmatrix}'),
-    (name: 'Maxwell',              latex: r'\nabla \times \mathbf{B} = \mu_0 \mathbf{J}'),
-    (name: 'Binomial theorem',     latex: r'(x+y)^n = \sum_{k=0}^n \binom{n}{k} x^k y^{n-k}'),
-    (name: 'Middle delimiter',     latex: r'\left( \frac{a}{b} \middle| \frac{c}{d} \right)'),
-    (name: 'FTC',                  latex: r'\frac{d}{dx}\left[\int_a^x f(t)\,dt\right] = f(x)'),
-    (name: "Stokes' theorem",      latex: r'\oint_{\partial\Sigma} \mathbf{F}\cdot d\mathbf{r} = \iint_\Sigma (\nabla\times\mathbf{F})\cdot d\mathbf{S}'),
-    (name: 'CJK · 勾股定理',       latex: r'\text{勾股定理：} a^2+b^2=c^2'),
-    (name: 'CJK · mhchem + 二氧化碳', latex: r'\ce{CO2 + C -> 2 CO} \quad \text{二氧化碳}'),
-    (name: 'Emoji · 笑脸',         latex: r'\text{😊} \quad E=mc^2'),
+    (name: 'Quadratic formula', latex: r'\frac{-b \pm \sqrt{b^2-4ac}}{2a}'),
+    (name: "Euler's identity", latex: r'e^{i\pi} + 1 = 0'),
+    (
+      name: 'Gaussian integral',
+      latex: r'\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}',
+    ),
+    (
+      name: 'Basel problem',
+      latex: r'\sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}',
+    ),
+    (name: 'Matrix', latex: r'\begin{pmatrix}a & b \\ c & d\end{pmatrix}'),
+    (name: 'Maxwell', latex: r'\nabla \times \mathbf{B} = \mu_0 \mathbf{J}'),
+    (
+      name: 'Binomial theorem',
+      latex: r'(x+y)^n = \sum_{k=0}^n \binom{n}{k} x^k y^{n-k}',
+    ),
+    (
+      name: 'Middle delimiter',
+      latex: r'\left( \frac{a}{b} \middle| \frac{c}{d} \right)',
+    ),
+    (name: 'FTC', latex: r'\frac{d}{dx}\left[\int_a^x f(t)\,dt\right] = f(x)'),
+    (
+      name: "Stokes' theorem",
+      latex:
+          r'\oint_{\partial\Sigma} \mathbf{F}\cdot d\mathbf{r} = \iint_\Sigma (\nabla\times\mathbf{F})\cdot d\mathbf{S}',
+    ),
+    (name: 'CJK · 勾股定理', latex: r'\text{勾股定理：} a^2+b^2=c^2'),
+    (
+      name: 'CJK · mhchem + 二氧化碳',
+      latex: r'\ce{CO2 + C -> 2 CO} \quad \text{二氧化碳}',
+    ),
+    (name: 'Emoji · 笑脸', latex: r'\text{😊} \quad E=mc^2'),
   ];
 
   final _controller = TextEditingController(
@@ -197,26 +219,28 @@ class _DemoPageState extends State<DemoPage> {
 
           // ── Preset formulas ──────────────────────────────────────────────
           _SectionHeader('Formula Examples'),
-          ..._formulas.map((f) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _label(context, f.name),
-                        const SizedBox(height: 8),
-                        _FormulaCard(
-                          latex: f.latex,
-                          fontSize: 22,
-                          displayMode: _displayMode,
-                        ),
-                      ],
-                    ),
+          ..._formulas.map(
+            (f) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _label(context, f.name),
+                      const SizedBox(height: 8),
+                      _FormulaCard(
+                        latex: f.latex,
+                        fontSize: 22,
+                        displayMode: _displayMode,
+                      ),
+                    ],
                   ),
                 ),
-              )),
+              ),
+            ),
+          ),
 
           // ── Custom input ─────────────────────────────────────────────────
           _SectionHeader('Custom Formula'),
@@ -240,8 +264,10 @@ class _DemoPageState extends State<DemoPage> {
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      Text('Size: ${_fontSize.toInt()}px',
-                          style: Theme.of(context).textTheme.bodySmall),
+                      Text(
+                        'Size: ${_fontSize.toInt()}px',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                       Expanded(
                         child: Slider(
                           value: _fontSize,
@@ -270,12 +296,9 @@ class _DemoPageState extends State<DemoPage> {
   }
 
   Widget _label(BuildContext context, String text) => Text(
-        text,
-        style: Theme.of(context)
-            .textTheme
-            .labelSmall
-            ?.copyWith(color: Colors.grey),
-      );
+    text,
+    style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Colors.grey),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -288,15 +311,18 @@ class _ShowcaseCard extends StatelessWidget {
   static const _blockItems = [
     (
       label: 'Fourier transform',
-      latex: r'\hat{f}(\xi) = \int_{-\infty}^{\infty} f(x)\,e^{-2\pi i x \xi}\,dx',
+      latex:
+          r'\hat{f}(\xi) = \int_{-\infty}^{\infty} f(x)\,e^{-2\pi i x \xi}\,dx',
     ),
     (
       label: '3D rotation matrix',
-      latex: r'R_z(\theta)=\begin{pmatrix}\cos\theta&-\sin\theta&0\\\sin\theta&\cos\theta&0\\0&0&1\end{pmatrix}',
+      latex:
+          r'R_z(\theta)=\begin{pmatrix}\cos\theta&-\sin\theta&0\\\sin\theta&\cos\theta&0\\0&0&1\end{pmatrix}',
     ),
     (
       label: 'Schrödinger equation',
-      latex: r'i\hbar\frac{\partial}{\partial t}\Psi = \left[-\frac{\hbar^2}{2m}\nabla^2 + V\right]\Psi',
+      latex:
+          r'i\hbar\frac{\partial}{\partial t}\Psi = \left[-\frac{\hbar^2}{2m}\nabla^2 + V\right]\Psi',
     ),
     (
       label: r'Residue theorem · \operatorname',
@@ -313,11 +339,12 @@ class _ShowcaseCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Inline layout — multiple rows showing text-before + formula + text-after
-            Text('Inline layout · baseline alignment',
-                style: Theme.of(context)
-                    .textTheme
-                    .labelSmall
-                    ?.copyWith(color: Colors.grey)),
+            Text(
+              'Inline layout · baseline alignment',
+              style: Theme.of(
+                context,
+              ).textTheme.labelSmall?.copyWith(color: Colors.grey),
+            ),
             const SizedBox(height: 6),
             buildInlineMath(
               r'Einstein showed that mass and energy are $E = mc^2$, where $c$ is the speed of light.',
@@ -346,11 +373,12 @@ class _ShowcaseCard extends StatelessWidget {
             // Block formulas
             for (final item in _blockItems) ...[
               const Divider(height: 24),
-              Text(item.label,
-                  style: Theme.of(context)
-                      .textTheme
-                      .labelSmall
-                      ?.copyWith(color: Colors.grey)),
+              Text(
+                item.label,
+                style: Theme.of(
+                  context,
+                ).textTheme.labelSmall?.copyWith(color: Colors.grey),
+              ),
               const SizedBox(height: 8),
               Center(
                 child: SingleChildScrollView(
@@ -381,13 +409,14 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Text(title,
-            style: Theme.of(context)
-                .textTheme
-                .titleSmall
-                ?.copyWith(color: Theme.of(context).colorScheme.primary)),
-      );
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Text(
+      title,
+      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+        color: Theme.of(context).colorScheme.primary,
+      ),
+    ),
+  );
 }
 
 class _FormulaCard extends StatelessWidget {

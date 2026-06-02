@@ -26,9 +26,9 @@ class RaTeXPainter extends CustomPainter {
 
   // MARK: - Dimensions (logical pixels)
 
-  double get widthPx       => displayList.width  * fontSize;
-  double get heightPx      => displayList.height * fontSize;
-  double get depthPx       => displayList.depth  * fontSize;
+  double get widthPx => displayList.width * fontSize;
+  double get heightPx => displayList.height * fontSize;
+  double get depthPx => displayList.depth * fontSize;
   double get totalHeightPx => heightPx + depthPx;
 
   // MARK: - Paint
@@ -37,17 +37,22 @@ class RaTeXPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     for (final item in displayList.items) {
       switch (item) {
-        case GlyphPathItem g: _drawGlyph(canvas, g);
-        case LineItem l:      _drawLine(canvas, l);
-        case RectItem r:      _drawRect(canvas, r);
-        case PathItem p:      _drawPath(canvas, p);
+        case GlyphPathItem g:
+          _drawGlyph(canvas, g);
+        case LineItem l:
+          _drawLine(canvas, l);
+        case RectItem r:
+          _drawRect(canvas, r);
+        case PathItem p:
+          _drawPath(canvas, p);
       }
     }
   }
 
   @override
   bool shouldRepaint(RaTeXPainter oldDelegate) =>
-      oldDelegate.displayList != displayList || oldDelegate.fontSize != fontSize;
+      oldDelegate.displayList != displayList ||
+      oldDelegate.fontSize != fontSize;
 
   // MARK: - Private helpers
 
@@ -58,7 +63,8 @@ class RaTeXPainter extends CustomPainter {
   Paint _paint(RaTeXColor c, {bool fill = true}) => Paint()
     ..color = _color(c)
     ..style = fill ? PaintingStyle.fill : PaintingStyle.stroke
-    ..strokeWidth = 1.0   // used only for stroke paths (radical surd, angle brackets)
+    ..strokeWidth =
+        1.0 // used only for stroke paths (radical surd, angle brackets)
     ..isAntiAlias = true;
 
   // MARK: Glyph — drawn via dart:ui ParagraphBuilder with KaTeX fonts.
@@ -74,7 +80,8 @@ class RaTeXPainter extends CustomPainter {
   static ({String? family, FontWeight weight, FontStyle style}) _parseFontId(
       String fontId) {
     // CJK / emoji fallback: let the engine use system default.
-    if (fontId == 'CJK-Regular' || fontId == 'CJK-Fallback' ||
+    if (fontId == 'CJK-Regular' ||
+        fontId == 'CJK-Fallback' ||
         fontId == 'Emoji-Fallback') {
       return (family: null, weight: FontWeight.normal, style: FontStyle.normal);
     }
@@ -87,8 +94,10 @@ class RaTeXPainter extends CustomPainter {
     final suffix = dash >= 0 ? fontId.substring(dash + 1) : 'Regular';
 
     final family = 'KaTeX_$prefix';
-    final weight = suffix.contains('Bold') ? FontWeight.bold : FontWeight.normal;
-    final style  = suffix.contains('Italic') ? FontStyle.italic : FontStyle.normal;
+    final weight =
+        suffix.contains('Bold') ? FontWeight.bold : FontWeight.normal;
+    final style =
+        suffix.contains('Italic') ? FontStyle.italic : FontStyle.normal;
 
     return (family: family, weight: weight, style: style);
   }
@@ -105,16 +114,16 @@ class RaTeXPainter extends CustomPainter {
     final pb = ui.ParagraphBuilder(ui.ParagraphStyle(
       fontFamily: family,
       fontWeight: weight,
-      fontStyle:  style,
-      fontSize:   sizePx,
-      textAlign:  TextAlign.left,
+      fontStyle: style,
+      fontSize: sizePx,
+      textAlign: TextAlign.left,
     ))
       ..pushStyle(ui.TextStyle(
-        color:      _color(g.color),
+        color: _color(g.color),
         fontFamily: family,
         fontWeight: weight,
-        fontStyle:  style,
-        fontSize:   sizePx,
+        fontStyle: style,
+        fontSize: sizePx,
       ))
       ..addText(String.fromCharCode(g.charCode));
 
@@ -157,18 +166,19 @@ class RaTeXPainter extends CustomPainter {
       canvas.drawPath(path, paint);
     } else {
       canvas.drawRect(
-        Rect.fromLTWH(_em(l.x), _em(l.y) - halfT, _em(l.width), t),
-        _paint(l.color));
+          Rect.fromLTWH(_em(l.x), _em(l.y) - halfT, _em(l.width), t),
+          _paint(l.color));
     }
   }
 
   void _drawRect(Canvas canvas, RectItem r) {
     canvas.drawRect(
-      Rect.fromLTWH(_em(r.x), _em(r.y), _em(r.width), _em(r.height)),
-      _paint(r.color));
+        Rect.fromLTWH(_em(r.x), _em(r.y), _em(r.width), _em(r.height)),
+        _paint(r.color));
   }
 
-  ui.Path _buildPath(List<PathCommand> commands, {double dx = 0, double dy = 0}) {
+  ui.Path _buildPath(List<PathCommand> commands,
+      {double dx = 0, double dy = 0}) {
     final path = ui.Path();
     for (final cmd in commands) {
       switch (cmd) {
@@ -177,15 +187,11 @@ class RaTeXPainter extends CustomPainter {
         case LineToCmd c:
           path.lineTo(_em(dx + c.x), _em(dy + c.y));
         case CubicToCmd c:
-          path.cubicTo(
-            _em(dx + c.x1), _em(dy + c.y1),
-            _em(dx + c.x2), _em(dy + c.y2),
-            _em(dx + c.x),  _em(dy + c.y));
+          path.cubicTo(_em(dx + c.x1), _em(dy + c.y1), _em(dx + c.x2),
+              _em(dy + c.y2), _em(dx + c.x), _em(dy + c.y));
         case QuadToCmd c:
-          path.conicTo(
-            _em(dx + c.x1), _em(dy + c.y1),
-            _em(dx + c.x),  _em(dy + c.y),
-            1.0); // weight 1 = quadratic Bézier
+          path.conicTo(_em(dx + c.x1), _em(dy + c.y1), _em(dx + c.x),
+              _em(dy + c.y), 1.0); // weight 1 = quadratic Bézier
         case CloseCmd _:
           path.close();
       }

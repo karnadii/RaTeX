@@ -39,28 +39,21 @@ class AppTheme {
   }
 
   static ThemeData _build(ColorScheme cs, Brightness b) => ThemeData(
-        useMaterial3: true,
-        colorScheme: cs,
-        brightness: b,
-        cardTheme: CardThemeData(
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: BorderSide(
-              color: cs.outlineVariant.withValues(alpha: 0.5),
-            ),
-          ),
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 12,
-          ),
-        ),
-      );
+    useMaterial3: true,
+    colorScheme: cs,
+    brightness: b,
+    cardTheme: CardThemeData(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.5)),
+      ),
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    ),
+  );
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -80,88 +73,90 @@ class FormulaEntry {
 }
 
 const _formulaGroups = [
-  FormulaGroup(label: 'Classics', entries: [
-    FormulaEntry(
-      name: 'Quadratic Formula',
-      latex: r'x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}',
-    ),
-    FormulaEntry(
-      name: "Euler's Identity",
-      latex: r'e^{i\pi} + 1 = 0',
-    ),
-    FormulaEntry(
-      name: 'Gaussian Integral',
-      latex: r'\int_{-\infty}^{\infty} e^{-x^2} \, dx = \sqrt{\pi}',
-    ),
-    FormulaEntry(
-      name: 'Basel Problem',
-      latex: r'\sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}',
-    ),
-  ]),
-  FormulaGroup(label: 'Calculus', entries: [
-    FormulaEntry(
-      name: 'Fundamental Theorem',
-      latex: r'\int_a^b f(x)\,dx = F(b) - F(a)',
-    ),
-    FormulaEntry(
-      name: "Stokes' Theorem",
-      latex: r'\int_{\partial\Omega} \omega = \int_{\Omega} d\omega',
-    ),
-    FormulaEntry(
-      name: 'Fourier Transform',
-      latex: r'\hat{f}(\xi) = \int_{-\infty}^{\infty} f(x)\, e^{-2\pi i x \xi}\, dx',
-    ),
-    FormulaEntry(
-      name: 'Residue Theorem',
-      latex: r'\oint_\gamma f(z)\,dz = 2\pi i \sum_{k} \operatorname{Res}(f, a_k)',
-    ),
-  ]),
-  FormulaGroup(label: 'Linear Algebra', entries: [
-    FormulaEntry(
-      name: 'Determinant (3x3)',
-      latex: r'\det\begin{pmatrix} a & b & c \\ d & e & f \\ g & h & i \end{pmatrix} = aei + bfg + cdh - ceg - bdi - afh',
-    ),
-    FormulaEntry(
-      name: 'Matrix Multiplication',
-      latex: r'(AB)_{ij} = \sum_{k=1}^{n} A_{ik} B_{kj}',
-    ),
-    FormulaEntry(
-      name: 'Eigenvalue Equation',
-      latex: r'A\mathbf{v} = \lambda \mathbf{v}',
-    ),
-  ]),
-  FormulaGroup(label: 'Physics', entries: [
-    FormulaEntry(
-      name: "Maxwell's Equations",
-      latex: r'\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0} \\ \nabla \cdot \mathbf{B} = 0 \\ \nabla \times \mathbf{E} = -\frac{\partial\mathbf{B}}{\partial t} \\ \nabla \times \mathbf{B} = \mu_0\mathbf{J} + \mu_0\varepsilon_0\frac{\partial\mathbf{E}}{\partial t}',
-    ),
-    FormulaEntry(
-      name: 'Schrodinger Equation',
-      latex: r'i\hbar\frac{\partial}{\partial t}\Psi(\mathbf{r},t) = \hat{H}\Psi(\mathbf{r},t)',
-    ),
-    FormulaEntry(
-      name: 'Mass-Energy Equivalence',
-      latex: r'E = mc^2',
-    ),
-  ]),
-  FormulaGroup(label: 'Chemistry', entries: [
-    FormulaEntry(
-      name: 'Water Formation',
-      latex: r'\ce{2H2 + O2 -> 2H2O}',
-    ),
-    FormulaEntry(
-      name: 'Combustion',
-      latex: r'\ce{CH4 + 2O2 -> CO2 + 2H2O}',
-    ),
-    FormulaEntry(
-      name: 'Haber Process',
-      latex: r'\ce{N2 + 3H2 <=> 2NH3}',
-    ),
-    FormulaEntry(
-      name: 'Physical Units',
-      latex: r'\pu{6.022e23 mol-1}',
-    ),
-  ]),
+  FormulaGroup(
+    label: 'Classics',
+    entries: [
+      FormulaEntry(
+        name: 'Quadratic Formula',
+        latex: r'x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}',
+      ),
+      FormulaEntry(name: "Euler's Identity", latex: r'e^{i\pi} + 1 = 0'),
+      FormulaEntry(
+        name: 'Gaussian Integral',
+        latex: r'\int_{-\infty}^{\infty} e^{-x^2} \, dx = \sqrt{\pi}',
+      ),
+      FormulaEntry(
+        name: 'Basel Problem',
+        latex: r'\sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}',
+      ),
+    ],
+  ),
+  FormulaGroup(
+    label: 'Calculus',
+    entries: [
+      FormulaEntry(
+        name: 'Fundamental Theorem',
+        latex: r'\int_a^b f(x)\,dx = F(b) - F(a)',
+      ),
+      FormulaEntry(
+        name: "Stokes' Theorem",
+        latex: r'\int_{\partial\Omega} \omega = \int_{\Omega} d\omega',
+      ),
+      FormulaEntry(
+        name: 'Fourier Transform',
+        latex:
+            r'\hat{f}(\xi) = \int_{-\infty}^{\infty} f(x)\, e^{-2\pi i x \xi}\, dx',
+      ),
+      FormulaEntry(
+        name: 'Residue Theorem',
+        latex:
+            r'\oint_\gamma f(z)\,dz = 2\pi i \sum_{k} \operatorname{Res}(f, a_k)',
+      ),
+    ],
+  ),
+  FormulaGroup(
+    label: 'Linear Algebra',
+    entries: [
+      FormulaEntry(
+        name: 'Determinant (3x3)',
+        latex:
+            r'\det\begin{pmatrix} a & b & c \\ d & e & f \\ g & h & i \end{pmatrix} = aei + bfg + cdh - ceg - bdi - afh',
+      ),
+      FormulaEntry(
+        name: 'Matrix Multiplication',
+        latex: r'(AB)_{ij} = \sum_{k=1}^{n} A_{ik} B_{kj}',
+      ),
+      FormulaEntry(
+        name: 'Eigenvalue Equation',
+        latex: r'A\mathbf{v} = \lambda \mathbf{v}',
+      ),
+    ],
+  ),
+  FormulaGroup(
+    label: 'Physics',
+    entries: [
+      FormulaEntry(
+        name: "Maxwell's Equations",
+        latex:
+            r'\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0} \\ \nabla \cdot \mathbf{B} = 0 \\ \nabla \times \mathbf{E} = -\frac{\partial\mathbf{B}}{\partial t} \\ \nabla \times \mathbf{B} = \mu_0\mathbf{J} + \mu_0\varepsilon_0\frac{\partial\mathbf{E}}{\partial t}',
+      ),
+      FormulaEntry(
+        name: 'Schrodinger Equation',
+        latex:
+            r'i\hbar\frac{\partial}{\partial t}\Psi(\mathbf{r},t) = \hat{H}\Psi(\mathbf{r},t)',
+      ),
+      FormulaEntry(name: 'Mass-Energy Equivalence', latex: r'E = mc^2'),
+    ],
+  ),
+  FormulaGroup(
+    label: 'Chemistry',
+    entries: [
+      FormulaEntry(name: 'Water Formation', latex: r'\ce{2H2 + O2 -> 2H2O}'),
+      FormulaEntry(name: 'Combustion', latex: r'\ce{CH4 + 2O2 -> CO2 + 2H2O}'),
+      FormulaEntry(name: 'Haber Process', latex: r'\ce{N2 + 3H2 <=> 2NH3}'),
+      FormulaEntry(name: 'Physical Units', latex: r'\pu{6.022e23 mol-1}'),
+    ],
+  ),
 ];
 
 // ──────────────────────────────────────────────────────────────
@@ -273,9 +268,9 @@ class _DesktopDemoPageState extends State<DesktopDemoPage> {
                 const SizedBox(width: 8),
                 Text(
                   'Formulas',
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        color: cs.onSurfaceVariant,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(color: cs.onSurfaceVariant),
                 ),
               ],
             ),
@@ -334,10 +329,7 @@ class _DesktopDemoPageState extends State<DesktopDemoPage> {
             ),
           ),
         ),
-        if (isExpanded)
-          ...group.entries.map(
-            (entry) => _buildEntry(entry, cs),
-          ),
+        if (isExpanded) ...group.entries.map((entry) => _buildEntry(entry, cs)),
       ],
     );
   }
@@ -391,8 +383,8 @@ class _DesktopDemoPageState extends State<DesktopDemoPage> {
                 child: Text(
                   _currentName,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                    fontWeight: FontWeight.w600,
+                  ),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -449,8 +441,7 @@ class _DesktopDemoPageState extends State<DesktopDemoPage> {
                     hintText: 'Enter custom LaTeX, e.g. \\frac{a}{b}',
                     isDense: true,
                   ),
-                  style:
-                      const TextStyle(fontFamily: 'monospace', fontSize: 13),
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
                   onSubmitted: (_) => _renderCustom(),
                 ),
               ),

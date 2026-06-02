@@ -22,11 +22,11 @@ export 'src/ratex_ffi.dart' show RaTeXException;
 // `Color.r` / `toARGB32` are unavailable. Newer SDKs deprecate these in favor of
 // float components; silenced per line below.
 RaTeXColor _toRaTeXColor(Color color) => RaTeXColor(
-  color.red / 255.0, // ignore: deprecated_member_use
-  color.green / 255.0, // ignore: deprecated_member_use
-  color.blue / 255.0, // ignore: deprecated_member_use
-  color.alpha / 255.0, // ignore: deprecated_member_use
-);
+      color.red / 255.0, // ignore: deprecated_member_use
+      color.green / 255.0, // ignore: deprecated_member_use
+      color.blue / 255.0, // ignore: deprecated_member_use
+      color.alpha / 255.0, // ignore: deprecated_member_use
+    );
 
 // MARK: - Engine
 
@@ -62,11 +62,12 @@ class RaTeXEngine {
     String latex, {
     bool displayMode = true,
     Color color = const Color(0xFF000000),
-  }) => _ffi.parseAndLayout(
-    latex,
-    displayMode: displayMode,
-    color: _toRaTeXColor(color),
-  );
+  }) =>
+      _ffi.parseAndLayout(
+        latex,
+        displayMode: displayMode,
+        color: _toRaTeXColor(color),
+      );
 }
 
 /// Legacy isolate message shape (still accepted by [ratexParseAndLayoutInIsolate]).
@@ -219,10 +220,19 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
           colorArgb: resolvedColor.value, // ignore: deprecated_member_use
         ),
       );
-      if (mounted) setState(() { _displayList = dl; _error = null; });
+      if (mounted) {
+        setState(() {
+          _displayList = dl;
+          _error = null;
+        });
+      }
     } on RaTeXException catch (e) {
       widget.onError?.call(e);
-      if (mounted) setState(() { _error = e; });
+      if (mounted) {
+        setState(() {
+          _error = e;
+        });
+      }
     }
   }
 
@@ -238,9 +248,9 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
     }
     final painter = RaTeXPainter(displayList: dl, fontSize: widget.fontSize);
     return SizedBox(
-      width:  painter.widthPx,
+      width: painter.widthPx,
       height: painter.totalHeightPx,
-      child:  CustomPaint(painter: painter),
+      child: CustomPaint(painter: painter),
     );
   }
 }
