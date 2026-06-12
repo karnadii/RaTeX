@@ -20,8 +20,7 @@ Widget buildInlineMath(
   double mathFontSize = 18,
   TextStyle? textStyle,
 }) {
-  final style =
-      textStyle ??
+  final style = textStyle ??
       const TextStyle(fontSize: 16, height: 1.8, color: Colors.black87);
 
   final parts = text.split('\$');
@@ -297,9 +296,12 @@ class _DemoPageState extends State<DemoPage> {
   }
 
   Widget _label(BuildContext context, String text) => Text(
-    text,
-    style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Colors.grey),
-  );
+        text,
+        style: Theme.of(context)
+            .textTheme
+            .labelSmall
+            ?.copyWith(color: Colors.grey),
+      );
 }
 
 // ---------------------------------------------------------------------------
@@ -410,14 +412,14 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Text(
-      title,
-      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-        color: Theme.of(context).colorScheme.primary,
-      ),
-    ),
-  );
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(
+          title,
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                color: Theme.of(context).colorScheme.primary,
+              ),
+        ),
+      );
 }
 
 class _FormulaCard extends StatelessWidget {
