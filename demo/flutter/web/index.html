@@ -5,31 +5,31 @@
   <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
   <title>RaTeX Demo</title>
 
-  <!-- RaTeX WASM loader — must appear before flutter.js -->
-  <script src="packages/ratex_flutter/ratex_loader.js"></script>
+  <!-- JS import() wrapper — Dart JS interop can't call import() directly -->
+  <script>window.ratexImportModule=(url)=>import(url);</script>
 
   <!-- KaTeX fonts for RaTeX rendering -->
   <style>
-    @font-face { font-family: 'KaTeX_AMS'; src: url('packages/ratex_flutter/fonts/KaTeX_AMS-Regular.ttf'); }
-    @font-face { font-family: 'KaTeX_Caligraphic'; src: url('packages/ratex_flutter/fonts/KaTeX_Caligraphic-Regular.ttf'); }
-    @font-face { font-family: 'KaTeX_Caligraphic'; src: url('packages/ratex_flutter/fonts/KaTeX_Caligraphic-Bold.ttf'); font-weight: bold; }
-    @font-face { font-family: 'KaTeX_Fraktur'; src: url('packages/ratex_flutter/fonts/KaTeX_Fraktur-Regular.ttf'); }
-    @font-face { font-family: 'KaTeX_Fraktur'; src: url('packages/ratex_flutter/fonts/KaTeX_Fraktur-Bold.ttf'); font-weight: bold; }
-    @font-face { font-family: 'KaTeX_Main'; src: url('packages/ratex_flutter/fonts/KaTeX_Main-Regular.ttf'); }
-    @font-face { font-family: 'KaTeX_Main'; src: url('packages/ratex_flutter/fonts/KaTeX_Main-Bold.ttf'); font-weight: bold; }
-    @font-face { font-family: 'KaTeX_Main'; src: url('packages/ratex_flutter/fonts/KaTeX_Main-Italic.ttf'); font-style: italic; }
-    @font-face { font-family: 'KaTeX_Main'; src: url('packages/ratex_flutter/fonts/KaTeX_Main-BoldItalic.ttf'); font-weight: bold; font-style: italic; }
-    @font-face { font-family: 'KaTeX_Math'; src: url('packages/ratex_flutter/fonts/KaTeX_Math-Italic.ttf'); font-style: italic; }
-    @font-face { font-family: 'KaTeX_Math'; src: url('packages/ratex_flutter/fonts/KaTeX_Math-BoldItalic.ttf'); font-weight: bold; font-style: italic; }
-    @font-face { font-family: 'KaTeX_SansSerif'; src: url('packages/ratex_flutter/fonts/KaTeX_SansSerif-Regular.ttf'); }
-    @font-face { font-family: 'KaTeX_SansSerif'; src: url('packages/ratex_flutter/fonts/KaTeX_SansSerif-Bold.ttf'); font-weight: bold; }
-    @font-face { font-family: 'KaTeX_SansSerif'; src: url('packages/ratex_flutter/fonts/KaTeX_SansSerif-Italic.ttf'); font-style: italic; }
-    @font-face { font-family: 'KaTeX_Script'; src: url('packages/ratex_flutter/fonts/KaTeX_Script-Regular.ttf'); }
-    @font-face { font-family: 'KaTeX_Typewriter'; src: url('packages/ratex_flutter/fonts/KaTeX_Typewriter-Regular.ttf'); }
-    @font-face { font-family: 'KaTeX_Size1'; src: url('packages/ratex_flutter/fonts/KaTeX_Size1-Regular.ttf'); }
-    @font-face { font-family: 'KaTeX_Size2'; src: url('packages/ratex_flutter/fonts/KaTeX_Size2-Regular.ttf'); }
-    @font-face { font-family: 'KaTeX_Size3'; src: url('packages/ratex_flutter/fonts/KaTeX_Size3-Regular.ttf'); }
-    @font-face { font-family: 'KaTeX_Size4'; src: url('packages/ratex_flutter/fonts/KaTeX_Size4-Regular.ttf'); }
+    @font-face { font-family: 'KaTeX_AMS'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_AMS-Regular.ttf'); }
+    @font-face { font-family: 'KaTeX_Caligraphic'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Caligraphic-Regular.ttf'); }
+    @font-face { font-family: 'KaTeX_Caligraphic'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Caligraphic-Bold.ttf'); font-weight: bold; }
+    @font-face { font-family: 'KaTeX_Fraktur'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Fraktur-Regular.ttf'); }
+    @font-face { font-family: 'KaTeX_Fraktur'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Fraktur-Bold.ttf'); font-weight: bold; }
+    @font-face { font-family: 'KaTeX_Main'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Main-Regular.ttf'); }
+    @font-face { font-family: 'KaTeX_Main'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Main-Bold.ttf'); font-weight: bold; }
+    @font-face { font-family: 'KaTeX_Main'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Main-Italic.ttf'); font-style: italic; }
+    @font-face { font-family: 'KaTeX_Main'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Main-BoldItalic.ttf'); font-weight: bold; font-style: italic; }
+    @font-face { font-family: 'KaTeX_Math'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Math-Italic.ttf'); font-style: italic; }
+    @font-face { font-family: 'KaTeX_Math'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Math-BoldItalic.ttf'); font-weight: bold; font-style: italic; }
+    @font-face { font-family: 'KaTeX_SansSerif'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_SansSerif-Regular.ttf'); }
+    @font-face { font-family: 'KaTeX_SansSerif'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_SansSerif-Bold.ttf'); font-weight: bold; }
+    @font-face { font-family: 'KaTeX_SansSerif'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_SansSerif-Italic.ttf'); font-style: italic; }
+    @font-face { font-family: 'KaTeX_Script'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Script-Regular.ttf'); }
+    @font-face { font-family: 'KaTeX_Typewriter'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Typewriter-Regular.ttf'); }
+    @font-face { font-family: 'KaTeX_Size1'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Size1-Regular.ttf'); }
+    @font-face { font-family: 'KaTeX_Size2'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Size2-Regular.ttf'); }
+    @font-face { font-family: 'KaTeX_Size3'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Size3-Regular.ttf'); }
+    @font-face { font-family: 'KaTeX_Size4'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Size4-Regular.ttf'); }
   </style>
 </head>
 <body>

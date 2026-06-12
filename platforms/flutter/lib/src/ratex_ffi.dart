@@ -13,6 +13,7 @@ import 'package:ffi/ffi.dart';
 
 import 'ratex_backend.dart';
 import 'display_list.dart';
+import 'ratex_exception.dart';
 
 // MARK: - C struct mirrors
 
@@ -111,14 +112,6 @@ class _RaTeXFFI {
 }
 
 // MARK: - Public wrapper
-
-/// Exception thrown when RaTeX fails to parse or lay out a formula.
-class RaTeXException implements Exception {
-  final String message;
-  const RaTeXException(this.message);
-  @override
-  String toString() => 'RaTeXException: $message';
-}
 
 RaTeXBackend createBackend() => RaTeXFfi();
 

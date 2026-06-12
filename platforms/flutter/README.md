@@ -132,6 +132,7 @@ You must build the native libraries first:
 | macOS | `bash platforms/flutter/build-desktop.sh` (produces universal `.dylib`) |
 | Windows | `bash platforms/flutter/build-desktop.sh --all` from macOS/Linux (cross-compiles `.dll` via zigbuild) |
 | Linux | `bash platforms/flutter/build-desktop.sh --all` from macOS/Linux (cross-compiles `.so` via zigbuild) |
+| **Web (WASM)** | `wasm-pack build crates/ratex-wasm --target web --out-dir ../../platforms/flutter/web/pkg --out-name ratex_wasm` |
 
 Alternatively, run the desktop build on the target host directly:
 ```bash
@@ -145,7 +146,7 @@ bash platforms/flutter/build-desktop.sh
 bash platforms/flutter/build-desktop.sh
 ```
 
-**Prerequisites for building from source:** Flutter 3.10+, Dart 3.0+, Rust 1.75+.
+**Prerequisites for building from source:** Flutter 3.10+, Dart 3.0+, Rust 1.75+, `wasm-pack` (for Web/WASM builds).
 
 ---
 
@@ -157,10 +158,11 @@ RaTeX supports Flutter Web via WASM, using `dart:js_interop` instead of FFI. The
 
 - Dart SDK >= 3.3.0 (required for `dart:js_interop`)
 - Flutter >= 3.19.0
+- `wasm-pack` (only needed when building the WASM module from source)
 
 ### Setup
 
-1. **Call `initRaTeX()` before `runApp()`** — this loads the WASM module:
+1. **Call `initRaTeX()` before `runApp()`** — this dynamically imports the WASM module:
 
    ```dart
    void main() async {
@@ -169,60 +171,88 @@ RaTeX supports Flutter Web via WASM, using `dart:js_interop` instead of FFI. The
    }
    ```
 
-2. **Add the WASM loader script** to your `web/index.html`, before `flutter_bootstrap.js`:
+2. **Add an `import()` wrapper** to your `web/index.html`, before `flutter_bootstrap.js`. This is required because Dart JS interop cannot call the JS `import()` function directly:
 
    ```html
-   <!-- RaTeX WASM loader — must appear before flutter.js -->
-   <script src="packages/ratex_flutter/ratex_loader.js"></script>
+   <!-- JS import() wrapper for Dart WASM module loading -->
+   <script>window.ratexImportModule=(url)=>import(url);</script>
    ```
 
-3. **Declare KaTeX fonts** in `web/index.html` via `@font-face` rules (Flutter Web does not use `pubspec.yaml` font declarations):
+3. **Declare KaTeX fonts** in `web/index.html` via `@font-face` rules using the `assets/packages/` path prefix (Flutter Web serves font assets from this path, not the `packages/` prefix):
 
    ```html
    <style>
-     @font-face { font-family: 'KaTeX_AMS'; src: url('packages/ratex_flutter/fonts/KaTeX_AMS-Regular.ttf'); }
-     @font-face { font-family: 'KaTeX_Caligraphic'; src: url('packages/ratex_flutter/fonts/KaTeX_Caligraphic-Regular.ttf'); }
-     @font-face { font-family: 'KaTeX_Caligraphic'; src: url('packages/ratex_flutter/fonts/KaTeX_Caligraphic-Bold.ttf'); font-weight: bold; }
-     @font-face { font-family: 'KaTeX_Fraktur'; src: url('packages/ratex_flutter/fonts/KaTeX_Fraktur-Regular.ttf'); }
-     @font-face { font-family: 'KaTeX_Fraktur'; src: url('packages/ratex_flutter/fonts/KaTeX_Fraktur-Bold.ttf'); font-weight: bold; }
-     @font-face { font-family: 'KaTeX_Main'; src: url('packages/ratex_flutter/fonts/KaTeX_Main-Regular.ttf'); }
-     @font-face { font-family: 'KaTeX_Main'; src: url('packages/ratex_flutter/fonts/KaTeX_Main-Bold.ttf'); font-weight: bold; }
-     @font-face { font-family: 'KaTeX_Main'; src: url('packages/ratex_flutter/fonts/KaTeX_Main-Italic.ttf'); font-style: italic; }
-     @font-face { font-family: 'KaTeX_Main'; src: url('packages/ratex_flutter/fonts/KaTeX_Main-BoldItalic.ttf'); font-weight: bold; font-style: italic; }
-     @font-face { font-family: 'KaTeX_Math'; src: url('packages/ratex_flutter/fonts/KaTeX_Math-Italic.ttf'); font-style: italic; }
-     @font-face { font-family: 'KaTeX_Math'; src: url('packages/ratex_flutter/fonts/KaTeX_Math-BoldItalic.ttf'); font-weight: bold; font-style: italic; }
-     @font-face { font-family: 'KaTeX_SansSerif'; src: url('packages/ratex_flutter/fonts/KaTeX_SansSerif-Regular.ttf'); }
-     @font-face { font-family: 'KaTeX_SansSerif'; src: url('packages/ratex_flutter/fonts/KaTeX_SansSerif-Bold.ttf'); font-weight: bold; }
-     @font-face { font-family: 'KaTeX_SansSerif'; src: url('packages/ratex_flutter/fonts/KaTeX_SansSerif-Italic.ttf'); font-style: italic; }
-     @font-face { font-family: 'KaTeX_Script'; src: url('packages/ratex_flutter/fonts/KaTeX_Script-Regular.ttf'); }
-     @font-face { font-family: 'KaTeX_Typewriter'; src: url('packages/ratex_flutter/fonts/KaTeX_Typewriter-Regular.ttf'); }
-     @font-face { font-family: 'KaTeX_Size1'; src: url('packages/ratex_flutter/fonts/KaTeX_Size1-Regular.ttf'); }
-     @font-face { font-family: 'KaTeX_Size2'; src: url('packages/ratex_flutter/fonts/KaTeX_Size2-Regular.ttf'); }
-     @font-face { font-family: 'KaTeX_Size3'; src: url('packages/ratex_flutter/fonts/KaTeX_Size3-Regular.ttf'); }
-     @font-face { font-family: 'KaTeX_Size4'; src: url('packages/ratex_flutter/fonts/KaTeX_Size4-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_AMS'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_AMS-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Caligraphic'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Caligraphic-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Caligraphic'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Caligraphic-Bold.ttf'); font-weight: bold; }
+     @font-face { font-family: 'KaTeX_Fraktur'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Fraktur-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Fraktur'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Fraktur-Bold.ttf'); font-weight: bold; }
+     @font-face { font-family: 'KaTeX_Main'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Main-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Main'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Main-Bold.ttf'); font-weight: bold; }
+     @font-face { font-family: 'KaTeX_Main'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Main-Italic.ttf'); font-style: italic; }
+     @font-face { font-family: 'KaTeX_Main'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Main-BoldItalic.ttf'); font-weight: bold; font-style: italic; }
+     @font-face { font-family: 'KaTeX_Math'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Math-Italic.ttf'); font-style: italic; }
+     @font-face { font-family: 'KaTeX_Math'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Math-BoldItalic.ttf'); font-weight: bold; font-style: italic; }
+     @font-face { font-family: 'KaTeX_SansSerif'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_SansSerif-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_SansSerif'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_SansSerif-Bold.ttf'); font-weight: bold; }
+     @font-face { font-family: 'KaTeX_SansSerif'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_SansSerif-Italic.ttf'); font-style: italic; }
+     @font-face { font-family: 'KaTeX_Script'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Script-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Typewriter'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Typewriter-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Size1'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Size1-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Size2'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Size2-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Size3'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Size3-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Size4'; src: url('assets/packages/ratex_flutter/fonts/KaTeX_Size4-Regular.ttf'); }
    </style>
    ```
 
    Without these `@font-face` rules, `RaTeXPainter` silently falls back to the system font and formulas render incorrectly.
 
+### Running with WASM
+
+```bash
+# Development (use --wasm flag)
+flutter run -d web-server --web-port=8080 --web-hostname=localhost --wasm
+
+# Production build
+flutter build web --wasm
+```
+
+### Building the WASM module from source
+
+The WASM module (`pkg/ratex_wasm.js` + `pkg/ratex_wasm_bg.wasm`) is not tracked in git — it must be built locally before running the web/WASM demo. The built files are declared as Flutter assets in the plugin's `pubspec.yaml` and bundled automatically once they exist.
+
+```bash
+# Install wasm-pack (if not already installed)
+cargo install wasm-pack
+
+# Build from the RaTeX repo root
+wasm-pack build crates/ratex-wasm --target web \
+  --out-dir ../../platforms/flutter/web/pkg \
+  --out-name ratex_wasm
+```
+
+This produces `platforms/flutter/web/pkg/ratex_wasm.js` and `platforms/flutter/web/pkg/ratex_wasm_bg.wasm`. After building, run `flutter pub get` in the plugin directory to register the assets.
+
 ### How it works
 
 ```
 LaTeX string
-    ↓ window.renderLatex()    [JS global → WASM]
+    ↓ initRaTeX()              [Dart → JS import() → WASM module]
+    ↓ renderLatex()            [WASM → JSON DisplayList]
 JSON string
-    ↓ jsonDecode()            [Dart JSON decode]
+    ↓ jsonDecode()             [Dart JSON decode]
 DisplayList
-    ↓ RaTeXPainter.paint()    [flutter/canvas]
+    ↓ RaTeXPainter.paint()     [flutter/canvas]
 CustomPaint Widget
 ```
 
-The conditional import in `ratex.dart` selects `ratex_web.dart` (WASM via `dart:js_interop`) when compiling for web, and `ratex_ffi.dart` (native FFI) otherwise.
+The conditional import in `ratex.dart` selects `ratex_web.dart` (WASM via `dart:js_interop`) when compiling for web, and `ratex_ffi.dart` (native FFI) otherwise. WASM assets are declared in the plugin's `pubspec.yaml` and bundled automatically — no manual file copying needed.
 
 ### Limitations
 
 - `Compute` isolates are not supported on web. `RaTeXWidget` will fall back to running `parseAndLayout` on the main thread. For most formulas this is fast enough; very complex documents may cause brief UI jank.
 - The WASM module must finish loading before any rendering calls. Always `await initRaTeX()` first.
+- The `window.ratexImportModule` wrapper in `index.html` is required because Dart JS interop cannot call the JS `import()` function directly (it is a special syntax, not a global function).
 
 ---
 
@@ -341,13 +371,18 @@ the bounding box. The baseline is at Y = `height × fontSize`.
 | `macos/` | macOS plugin (podspec + RaTeXPlugin.swift); links universal `.dylib` |
 | `windows/` | Windows plugin (CMake + C++ stub); includes `ratex_ffi.dll` |
 | `linux/` | Linux plugin (CMake + GObject stub); includes per-arch `libratex_ffi.so` |
-| `lib/ratex_flutter.dart` | Public API: `RaTeXEngine`, `RaTeXWidget` |
+| `lib/ratex_flutter.dart` | Public API: `RaTeXEngine`, `RaTeXWidget`, conditional export of `RatexFlutterWeb` |
 | `lib/src/display_list.dart` | Dart JSON types (DisplayList, DisplayItem, …) |
+| `lib/src/ratex_exception.dart` | `RaTeXException` (shared by FFI and web backends) |
 | `lib/src/ratex_ffi.dart` | Dart FFI bindings to `libratex_ffi` |
 | `lib/src/ratex_web.dart` | Web backend (WASM via `dart:js_interop`) |
-| `lib/src/ratex_web_init.dart` | Web WASM initialization |
+| `lib/src/ratex_web_init.dart` | Web WASM initialization (dynamic `import()` via JS interop) |
+| `lib/src/ratex_web_plugin_stub.dart` | Native stub for `RatexFlutterWeb` (conditional export) |
+| `lib/src/ratex_web_plugin.dart` | Web `RatexFlutterWeb` plugin class (conditional export) |
 | `lib/src/ratex_painter.dart` | `CustomPainter` drawing loop |
-| `web/ratex_loader.js` | WASM loader script for `index.html` |
+| `web/pkg/ratex_wasm.js` | wasm-bindgen JS glue (WASM module entry) |
+| `web/pkg/ratex_wasm_bg.wasm` | Compiled Rust WASM binary |
+| `web/ratex_loader.js` | Alternative JS-only WASM loader (not needed with Dart-based init) |
 
 ---
 

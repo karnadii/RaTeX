@@ -3,13 +3,15 @@ import 'package:flutter/material.dart';
 
 import 'src/display_list.dart';
 import 'src/ratex_backend.dart';
-import 'src/ratex_ffi.dart' if (dart.library.js_interop) 'src/ratex_web.dart' as backend;
-import 'src/ratex_native_init.dart' if (dart.library.js_interop) 'src/ratex_web_init.dart' as init;
-import 'src/ratex_ffi.dart' show RaTeXException;
+import 'src/ratex_ffi.dart' if (dart.library.js_interop) 'src/ratex_web.dart'
+    as backend;
+import 'src/ratex_native_init.dart'
+    if (dart.library.js_interop) 'src/ratex_web_init.dart' as init;
+import 'src/ratex_exception.dart';
 import 'src/ratex_painter.dart';
 
 export 'src/display_list.dart';
-export 'src/ratex_ffi.dart' show RaTeXException;
+export 'src/ratex_exception.dart';
 
 RaTeXColor _toRaTeXColor(Color color) => RaTeXColor(
       color.red / 255.0, // ignore: deprecated_member_use
