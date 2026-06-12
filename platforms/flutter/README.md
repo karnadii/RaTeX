@@ -149,6 +149,83 @@ bash platforms/flutter/build-desktop.sh
 
 ---
 
+## Flutter Web
+
+RaTeX supports Flutter Web via WASM, using `dart:js_interop` instead of FFI. The same `RaTeXWidget` and `RaTeXEngine` APIs work on web with no code changes — the backend is selected automatically via conditional imports.
+
+### Requirements
+
+- Dart SDK >= 3.3.0 (required for `dart:js_interop`)
+- Flutter >= 3.19.0
+
+### Setup
+
+1. **Call `initRaTeX()` before `runApp()`** — this loads the WASM module:
+
+   ```dart
+   void main() async {
+     await initRaTeX();
+     runApp(MyApp());
+   }
+   ```
+
+2. **Add the WASM loader script** to your `web/index.html`, before `flutter_bootstrap.js`:
+
+   ```html
+   <!-- RaTeX WASM loader — must appear before flutter.js -->
+   <script src="packages/ratex_flutter/ratex_loader.js"></script>
+   ```
+
+3. **Declare KaTeX fonts** in `web/index.html` via `@font-face` rules (Flutter Web does not use `pubspec.yaml` font declarations):
+
+   ```html
+   <style>
+     @font-face { font-family: 'KaTeX_AMS'; src: url('packages/ratex_flutter/fonts/KaTeX_AMS-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Caligraphic'; src: url('packages/ratex_flutter/fonts/KaTeX_Caligraphic-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Caligraphic'; src: url('packages/ratex_flutter/fonts/KaTeX_Caligraphic-Bold.ttf'); font-weight: bold; }
+     @font-face { font-family: 'KaTeX_Fraktur'; src: url('packages/ratex_flutter/fonts/KaTeX_Fraktur-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Fraktur'; src: url('packages/ratex_flutter/fonts/KaTeX_Fraktur-Bold.ttf'); font-weight: bold; }
+     @font-face { font-family: 'KaTeX_Main'; src: url('packages/ratex_flutter/fonts/KaTeX_Main-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Main'; src: url('packages/ratex_flutter/fonts/KaTeX_Main-Bold.ttf'); font-weight: bold; }
+     @font-face { font-family: 'KaTeX_Main'; src: url('packages/ratex_flutter/fonts/KaTeX_Main-Italic.ttf'); font-style: italic; }
+     @font-face { font-family: 'KaTeX_Main'; src: url('packages/ratex_flutter/fonts/KaTeX_Main-BoldItalic.ttf'); font-weight: bold; font-style: italic; }
+     @font-face { font-family: 'KaTeX_Math'; src: url('packages/ratex_flutter/fonts/KaTeX_Math-Italic.ttf'); font-style: italic; }
+     @font-face { font-family: 'KaTeX_Math'; src: url('packages/ratex_flutter/fonts/KaTeX_Math-BoldItalic.ttf'); font-weight: bold; font-style: italic; }
+     @font-face { font-family: 'KaTeX_SansSerif'; src: url('packages/ratex_flutter/fonts/KaTeX_SansSerif-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_SansSerif'; src: url('packages/ratex_flutter/fonts/KaTeX_SansSerif-Bold.ttf'); font-weight: bold; }
+     @font-face { font-family: 'KaTeX_SansSerif'; src: url('packages/ratex_flutter/fonts/KaTeX_SansSerif-Italic.ttf'); font-style: italic; }
+     @font-face { font-family: 'KaTeX_Script'; src: url('packages/ratex_flutter/fonts/KaTeX_Script-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Typewriter'; src: url('packages/ratex_flutter/fonts/KaTeX_Typewriter-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Size1'; src: url('packages/ratex_flutter/fonts/KaTeX_Size1-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Size2'; src: url('packages/ratex_flutter/fonts/KaTeX_Size2-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Size3'; src: url('packages/ratex_flutter/fonts/KaTeX_Size3-Regular.ttf'); }
+     @font-face { font-family: 'KaTeX_Size4'; src: url('packages/ratex_flutter/fonts/KaTeX_Size4-Regular.ttf'); }
+   </style>
+   ```
+
+   Without these `@font-face` rules, `RaTeXPainter` silently falls back to the system font and formulas render incorrectly.
+
+### How it works
+
+```
+LaTeX string
+    ↓ window.renderLatex()    [JS global → WASM]
+JSON string
+    ↓ jsonDecode()            [Dart JSON decode]
+DisplayList
+    ↓ RaTeXPainter.paint()    [flutter/canvas]
+CustomPaint Widget
+```
+
+The conditional import in `ratex.dart` selects `ratex_web.dart` (WASM via `dart:js_interop`) when compiling for web, and `ratex_ffi.dart` (native FFI) otherwise.
+
+### Limitations
+
+- `Compute` isolates are not supported on web. `RaTeXWidget` will fall back to running `parseAndLayout` on the main thread. For most formulas this is fast enough; very complex documents may cause brief UI jank.
+- The WASM module must finish loading before any rendering calls. Always `await initRaTeX()` first.
+
+---
+
 ## Usage
 
 ### Widget (recommended)
@@ -267,7 +344,10 @@ the bounding box. The baseline is at Y = `height × fontSize`.
 | `lib/ratex_flutter.dart` | Public API: `RaTeXEngine`, `RaTeXWidget` |
 | `lib/src/display_list.dart` | Dart JSON types (DisplayList, DisplayItem, …) |
 | `lib/src/ratex_ffi.dart` | Dart FFI bindings to `libratex_ffi` |
+| `lib/src/ratex_web.dart` | Web backend (WASM via `dart:js_interop`) |
+| `lib/src/ratex_web_init.dart` | Web WASM initialization |
 | `lib/src/ratex_painter.dart` | `CustomPainter` drawing loop |
+| `web/ratex_loader.js` | WASM loader script for `index.html` |
 
 ---
 

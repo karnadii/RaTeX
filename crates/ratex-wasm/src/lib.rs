@@ -4,6 +4,7 @@ use ratex_layout::{layout, to_display_list, LayoutOptions};
 use ratex_parser::parse;
 use ratex_types::color::Color;
 use ratex_types::display_item::{DisplayItem, DisplayList};
+use ratex_types::math_style::MathStyle;
 use ratex_types::path_command::PathCommand;
 use wasm_bindgen::prelude::*;
 
@@ -20,12 +21,17 @@ struct VersionedDisplayList<'a> {
 /// # Errors
 /// Returns a JS error string if parsing fails.
 #[wasm_bindgen(js_name = "renderLatex")]
-pub fn render_latex(latex: &str, color: Option<String>) -> Result<String, JsValue> {
-    render_latex_impl(latex, color.as_deref()).map_err(|e| JsValue::from_str(&e))
+pub fn render_latex(latex: &str, display_mode: Option<bool>, color: Option<String>) -> Result<String, JsValue> {
+    render_latex_impl(latex, display_mode, color.as_deref()).map_err(|e| JsValue::from_str(&e))
 }
 
-fn render_latex_impl(latex: &str, color: Option<&str>) -> Result<String, String> {
+fn render_latex_impl(latex: &str, display_mode: Option<bool>, color: Option<&str>) -> Result<String, String> {
     let nodes = parse(latex).map_err(|e| e.to_string())?;
+    let style = if display_mode.unwrap_or(true) {
+        MathStyle::Display
+    } else {
+        MathStyle::Text
+    };
     let options = if let Some(color) = color {
         let color = Color::parse(color).ok_or_else(|| {
             format!(
@@ -33,9 +39,9 @@ fn render_latex_impl(latex: &str, color: Option<&str>) -> Result<String, String>
                 color
             )
         })?;
-        LayoutOptions::default().with_color(color)
+        LayoutOptions::default().with_style(style).with_color(color)
     } else {
-        LayoutOptions::default()
+        LayoutOptions::default().with_style(style)
     };
     let layout_box = layout(&nodes, &options);
     let mut display_list = to_display_list(&layout_box);

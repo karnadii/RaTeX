@@ -13,11 +13,13 @@ topics:
   - ffi
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"
-  flutter: ">=3.10.0"
+  sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.19.0"
 
 dependencies:
   flutter:
+    sdk: flutter
+  flutter_web_plugins:
     sdk: flutter
   ffi: ^2.1.0
 
@@ -32,15 +34,23 @@ flutter:
         # The native RaTeXPlugin.swift class handles plugin registration,
         # and DynamicLibrary.process() resolves the C symbols at runtime.
         pluginClass: RaTeXPlugin
+        fileName: ratex_flutter.dart
       android:
         package: io.ratex
         pluginClass: RaTeXPlugin
+        fileName: ratex_flutter.dart
       macos:
         pluginClass: RaTeXPlugin
+        fileName: ratex_flutter.dart
       windows:
         pluginClass: RatexFlutterPluginCApi
+        fileName: ratex_flutter.dart
       linux:
         pluginClass: RatexFlutterPlugin
+        fileName: ratex_flutter.dart
+      web:
+        pluginClass: RatexFlutterWeb
+        fileName: ratex_flutter.dart
 
   # KaTeX fonts bundled with the plugin.
   # GlyphPath items in the DisplayList carry a font ID (e.g. "Math-Italic")

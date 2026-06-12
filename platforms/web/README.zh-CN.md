@@ -6,9 +6,9 @@
 
 ## 架构
 
-- **ratex-wasm**（`crates/ratex-wasm`）：Rust → WASM，导出 `renderLatex(latex: string, color?: string) => string`，返回 DisplayList JSON。
+- **ratex-wasm**（`crates/ratex-wasm`）：Rust → WASM，导出 `renderLatex(latex: string, displayMode?: boolean, color?: string) => string`，返回 DisplayList JSON。
 - **web-render**（`src/renderer.ts`）：将 DisplayList 绘制到 Canvas 2D。`GlyphPath` 条目通过 Canvas `fillText` 与 `char_code` 加载的 KaTeX 字体绘制；页面需加载数学字体（随包附带的 `fonts.css` 已覆盖此需求）。
-- **入口**（`src/index.ts`）：初始化 WASM，提供 `renderLatexToCanvas(latex, canvas, options, color?)` 一步渲染。
+- **入口**（`src/index.ts`）：初始化 WASM，提供 `renderLatexToCanvas(latex, canvas, options, displayMode?, color?)` 一步渲染。
 
 ## 开箱即用
 

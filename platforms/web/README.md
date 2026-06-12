@@ -6,9 +6,9 @@ Use RaTeX in the browser: Rust compiled to WASM handles parsing and layout; Type
 
 ## Architecture
 
-- **ratex-wasm** (`crates/ratex-wasm`): Rust → WASM, exports `renderLatex(latex: string, color?: string) => string` returning DisplayList JSON.
+- **ratex-wasm** (`crates/ratex-wasm`): Rust → WASM, exports `renderLatex(latex: string, displayMode?: boolean, color?: string) => string` returning DisplayList JSON.
 - **web-render** (`src/renderer.ts`): Renders the DisplayList to Canvas 2D. `GlyphPath` items are drawn via Canvas `fillText` using `char_code` and the loaded KaTeX font; the page must load a math font (bundled `fonts.css` covers this).
-- **Entry** (`src/index.ts`): Initializes WASM and provides `renderLatexToCanvas(latex, canvas, options, color?)` for one-step rendering.
+- **Entry** (`src/index.ts`): Initializes WASM and provides `renderLatexToCanvas(latex, canvas, options, displayMode?, color?)` for one-step rendering.
 
 ## Out of the box
 

@@ -11,6 +11,7 @@ import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
+import 'ratex_backend.dart';
 import 'display_list.dart';
 
 // MARK: - C struct mirrors
@@ -119,17 +120,13 @@ class RaTeXException implements Exception {
   String toString() => 'RaTeXException: $message';
 }
 
+RaTeXBackend createBackend() => RaTeXFfi();
+
 /// Dart FFI wrapper around the RaTeX C ABI.
-class RaTeXFfi {
+class RaTeXFfi implements RaTeXBackend {
   final _RaTeXFFI _ffi = _RaTeXFFI();
 
-  /// Parse and lay out [latex], returning a [DisplayList].
-  ///
-  /// [displayMode] controls the rendering style:
-  /// - `true` (default) — display/block style, equivalent to `$$...$$`
-  /// - `false`          — inline/text style, equivalent to `$...$`
-  ///
-  /// Throws [RaTeXException] on parse errors.
+  @override
   DisplayList parseAndLayout(
     String latex, {
     bool displayMode = true,

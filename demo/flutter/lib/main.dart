@@ -51,7 +51,8 @@ Widget buildInlineMath(
   return RichText(text: TextSpan(children: spans));
 }
 
-void main() {
+void main() async {
+  await initRaTeX();
   runApp(const RaTeXDemoApp());
 }
 

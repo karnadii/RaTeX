@@ -1,26 +1,16 @@
-// ratex.dart — Public API for the ratex_flutter package.
-//
-// Usage:
-//   import 'package:ratex_flutter/ratex.dart';
-//
-//   Widget build(BuildContext context) => RaTeXWidget(
-//     latex: r'\frac{-b \pm \sqrt{b^2-4ac}}{2a}',
-//     fontSize: 24,
-//   );
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'src/display_list.dart';
-import 'src/ratex_ffi.dart';
+import 'src/ratex_backend.dart';
+import 'src/ratex_ffi.dart' if (dart.library.js_interop) 'src/ratex_web.dart' as backend;
+import 'src/ratex_native_init.dart' if (dart.library.js_interop) 'src/ratex_web_init.dart' as init;
+import 'src/ratex_ffi.dart' show RaTeXException;
 import 'src/ratex_painter.dart';
 
 export 'src/display_list.dart';
 export 'src/ratex_ffi.dart' show RaTeXException;
 
-// Use 0–255 components so this package stays compatible with older Flutter where
-// `Color.r` / `toARGB32` are unavailable. Newer SDKs deprecate these in favor of
-// float components; silenced per line below.
 RaTeXColor _toRaTeXColor(Color color) => RaTeXColor(
       color.red / 255.0, // ignore: deprecated_member_use
       color.green / 255.0, // ignore: deprecated_member_use
@@ -28,56 +18,48 @@ RaTeXColor _toRaTeXColor(Color color) => RaTeXColor(
       color.alpha / 255.0, // ignore: deprecated_member_use
     );
 
+// MARK: - Initialization
+
+/// Initialize the RaTeX engine.
+///
+/// On web, this loads the WASM module (must be called before any rendering).
+/// On native platforms, this is a no-op.
+///
+/// Call this once in `main()` before `runApp()`:
+/// ```dart
+/// void main() async {
+///   await initRaTeX();
+///   runApp(MyApp());
+/// }
+/// ```
+Future<void> initRaTeX() => init.initRaTeXWeb();
+
 // MARK: - Engine
 
-/// High-level entry point for RaTeX rendering.
 class RaTeXEngine {
   static final RaTeXEngine instance = RaTeXEngine._();
   RaTeXEngine._();
 
-  final _ffi = RaTeXFfi();
+  final RaTeXBackend _backend = backend.createBackend();
 
-  /// Parse and lay out [latex], returning a [DisplayList].
-  ///
-  /// [displayMode] — `true` (default) for display/block style (`$$...$$`);
-  /// `false` for inline/text style (`$...$`).
-  /// [color] sets the default formula color; explicit LaTeX colors still take precedence.
-  ///
-  /// This is a synchronous, CPU-bound call. For long formulas, use [compute]
-  /// with [ratexParseAndLayoutInIsolate]:
-  /// ```dart
-  /// final dl = await compute(
-  ///   ratexParseAndLayoutInIsolate,
-  ///   RaTeXParseAndLayoutIsolateArgs(
-  ///     latex: tex,
-  ///     displayMode: true,
-  ///     colorArgb: 0xFF000000, // 32-bit ARGB (e.g. [Color]`.value` at runtime)
-  ///   ),
-  /// );
-  /// ```
-  ///
-  /// [ratexParseAndLayoutInIsolate] also accepts the legacy record shape
-  /// [RaTeXParseAndLayoutArgs] (`colorValue` instead of [RaTeXParseAndLayoutIsolateArgs.colorArgb]).
   DisplayList parseAndLayout(
     String latex, {
     bool displayMode = true,
     Color color = const Color(0xFF000000),
   }) =>
-      _ffi.parseAndLayout(
+      _backend.parseAndLayout(
         latex,
         displayMode: displayMode,
         color: _toRaTeXColor(color),
       );
 }
 
-/// Legacy isolate message shape (still accepted by [ratexParseAndLayoutInIsolate]).
 typedef RaTeXParseAndLayoutArgs = ({
   String latex,
   bool displayMode,
   int colorValue,
 });
 
-/// Arguments for [ratexParseAndLayoutInIsolate] (e.g. pass to [compute]).
 @immutable
 class RaTeXParseAndLayoutIsolateArgs {
   const RaTeXParseAndLayoutIsolateArgs({
@@ -89,14 +71,9 @@ class RaTeXParseAndLayoutIsolateArgs {
   final String latex;
   final bool displayMode;
 
-  /// 32-bit ARGB (opaque black is `0xFF000000`). If null, black is used.
   final int? colorArgb;
 }
 
-/// Top-level isolate entry for [compute]; calls [RaTeXEngine.parseAndLayout].
-///
-/// Accepts [RaTeXParseAndLayoutIsolateArgs] or the legacy record [RaTeXParseAndLayoutArgs]
-/// (`colorValue` is treated like non-null [RaTeXParseAndLayoutIsolateArgs.colorArgb]).
 DisplayList ratexParseAndLayoutInIsolate(Object args) {
   final RaTeXParseAndLayoutIsolateArgs resolved = switch (args) {
     final RaTeXParseAndLayoutIsolateArgs a => a,
@@ -125,31 +102,12 @@ DisplayList ratexParseAndLayoutInIsolate(Object args) {
 
 // MARK: - Stateful widget
 
-/// A Flutter widget that renders a LaTeX math formula natively.
-///
-/// ```dart
-/// RaTeXWidget(
-///   latex: r'\int_0^\infty e^{-x^2}\,dx = \frac{\sqrt{\pi}}{2}',
-///   fontSize: 24,
-/// )
-/// ```
 class RaTeXWidget extends StatefulWidget {
-  /// The LaTeX math-mode string to render.
   final String latex;
-
-  /// Font size in logical pixels.
   final double fontSize;
-
-  /// `true` (default) — display/block style; `false` — inline/text style.
   final bool displayMode;
-
-  /// Default formula color. Explicit LaTeX colors still take precedence.
   final Color? color;
-
-  /// Widget displayed while the formula is being computed.
   final Widget? loading;
-
-  /// Called when a render error occurs.
   final void Function(RaTeXException)? onError;
 
   const RaTeXWidget({

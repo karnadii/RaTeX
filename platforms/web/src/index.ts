@@ -12,7 +12,7 @@ import type { DisplayList } from "./types.js";
 import type { WebRenderOptions } from "./renderer.js";
 
 let wasmModule: {
-  renderLatex: (latex: string, color?: string) => string;
+  renderLatex: (latex: string, displayMode?: boolean, color?: string) => string;
 } | null = null;
 let _initPromise: Promise<void> | null = null;
 
@@ -21,14 +21,14 @@ let _initPromise: Promise<void> | null = null;
  * the same in-flight promise so WASM is loaded at most once.
  * Pass the URL to the WASM package's init (e.g. from your bundler or script tag).
  */
-export function initRatex(init?: () => Promise<{ renderLatex: (s: string) => string }>): Promise<void> {
+export function initRatex(init?: () => Promise<{ renderLatex: (s: string, d?: boolean, c?: string) => string }>): Promise<void> {
   if (wasmModule) return Promise.resolve();
   if (_initPromise) return _initPromise;
   _initPromise = _doInit(init);
   return _initPromise;
 }
 
-async function _doInit(init?: () => Promise<{ renderLatex: (s: string) => string }>): Promise<void> {
+async function _doInit(init?: () => Promise<{ renderLatex: (s: string, d?: boolean, c?: string) => string }>): Promise<void> {
   if (init) {
     const module = await init();
     wasmModule = { renderLatex: module.renderLatex };
@@ -46,17 +46,17 @@ async function _doInit(init?: () => Promise<{ renderLatex: (s: string) => string
  * Parse LaTeX and return the display list as a JSON string (or throw on parse error).
  * Requires initRatex() to have been called first.
  */
-export function renderLatex(latex: string, color?: string): string {
+export function renderLatex(latex: string, displayMode?: boolean, color?: string): string {
   if (!wasmModule) throw new Error("RaTeX WASM not initialized. Call initRatex() first.");
-  return wasmModule.renderLatex(latex, color);
+  return wasmModule.renderLatex(latex, displayMode, color);
 }
 
 /**
  * Parse LaTeX and return the display list as a DisplayList object.
  * Throws if LaTeX is invalid or WASM not initialized.
  */
-export function renderLatexToDisplayList(latex: string, color?: string): DisplayList {
-  const json = renderLatex(latex, color);
+export function renderLatexToDisplayList(latex: string, displayMode?: boolean, color?: string): DisplayList {
+  const json = renderLatex(latex, displayMode, color);
   try {
     return JSON.parse(json) as DisplayList;
   } catch (e) {
@@ -81,9 +81,10 @@ export function renderLatexToCanvas(
   latex: string,
   canvas: HTMLCanvasElement,
   options?: WebRenderOptions,
+  displayMode?: boolean,
   color?: string
 ): DisplayList {
-  const displayList = renderLatexToDisplayList(latex, color);
+  const displayList = renderLatexToDisplayList(latex, displayMode, color);
   renderToCanvas(displayList, canvas, options);
   return displayList;
 }
