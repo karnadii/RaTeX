@@ -112,12 +112,26 @@ class RaTeXWidget extends StatefulWidget {
   final Widget? loading;
   final void Function(RaTeXException)? onError;
 
+  /// Optional contrasting color drawn as a glyph-level stroke
+  /// behind every item in the formula. Pass the plot's
+  /// background color so the label stays readable when it
+  /// crosses a curve, grid line, or axis. Set `null` (default)
+  /// to skip the halo pass.
+  final Color? haloColor;
+
+  /// Halo stroke width in logical pixels. Ignored when
+  /// [haloColor] is `null`. Defaults to `3.0` (matches
+  /// plotter's `paintTextWithHalo`).
+  final double haloWidth;
+
   const RaTeXWidget({
     super.key,
     required this.latex,
     this.fontSize = 24,
     this.displayMode = true,
     this.color,
+    this.haloColor,
+    this.haloWidth = 3.0,
     this.loading,
     this.onError,
   });
@@ -206,7 +220,12 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
     if (dl == null) {
       return widget.loading ?? const SizedBox.shrink();
     }
-    final painter = RaTeXPainter(displayList: dl, fontSize: widget.fontSize);
+    final painter = RaTeXPainter(
+      displayList: dl,
+      fontSize: widget.fontSize,
+      haloColor: widget.haloColor,
+      haloWidth: widget.haloWidth,
+    );
     return SizedBox(
       width: painter.widthPx,
       height: painter.totalHeightPx,
