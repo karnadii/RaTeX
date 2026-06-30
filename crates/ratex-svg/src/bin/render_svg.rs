@@ -82,14 +82,22 @@ fn main() {
     };
 
     let inline = args.contains(&"--inline".to_string());
-    let style = if inline { MathStyle::Text } else { MathStyle::Display };
+    let style = if inline {
+        MathStyle::Text
+    } else {
+        MathStyle::Display
+    };
     let layout_opts = LayoutOptions::default().with_style(style).with_color(color);
 
     let mut idx = 0;
+    let mut wrote = 0;
+    let mut failed = 0;
     let reader: Box<dyn BufRead> = match input_file {
-        Some(path) => Box::new(io::BufReader::new(
-            File::open(&path).unwrap_or_else(|e| panic!("Failed to open input file '{}': {}", path, e)),
-        )),
+        Some(path) => {
+            Box::new(io::BufReader::new(File::open(&path).unwrap_or_else(|e| {
+                panic!("Failed to open input file '{}': {}", path, e)
+            })))
+        }
         None => Box::new(io::BufReader::new(io::stdin())),
     };
     for line in reader.lines() {
@@ -110,23 +118,34 @@ fn main() {
                     handle
                         .write_all(b"\n")
                         .expect("Failed to write SVG to stdout");
+                    wrote += 1;
                     eprintln!("OK  {:4} {}", idx, expr);
                 } else {
                     let path = PathBuf::from(&output_dir).join(format!("{:04}.svg", idx));
                     std::fs::write(&path, svg.as_bytes()).expect("Failed to write SVG");
+                    wrote += 1;
                     println!("OK  {:4} {}", idx, expr);
                 }
             }
             Err(e) => {
+                failed += 1;
                 eprintln!("ERR {:4} {} — {}", idx, expr, e);
             }
         }
     }
 
+    let summary = format!(
+        "\nProcessed {} formula(s), wrote {} SVG(s), failed {}.",
+        idx, wrote, failed
+    );
     if stdout {
-        eprintln!("\nWrote {} SVG(s) to stdout", idx);
+        eprintln!("{summary}");
     } else {
-        println!("\nWrote {} SVG(s) to {}/", idx, output_dir);
+        println!("{summary}");
+    }
+
+    if failed > 0 {
+        std::process::exit(1);
     }
 }
 
@@ -143,12 +162,7 @@ fn svg_formula(
 
 fn default_font_dir() -> String {
     const MARKER: &str = "KaTeX_Main-Regular.ttf";
-    let candidates = [
-        "fonts",
-        "../fonts",
-        "../../fonts",
-        "../../../fonts",
-    ];
+    let candidates = ["fonts", "../fonts", "../../fonts", "../../../fonts"];
     for c in &candidates {
         let p = std::path::Path::new(c);
         if p.join(MARKER).is_file() {

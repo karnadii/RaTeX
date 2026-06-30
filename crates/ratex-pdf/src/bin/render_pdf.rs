@@ -12,7 +12,10 @@ use ratex_types::math_style::MathStyle;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        print!("{}", help_text(args.first().map(String::as_str).unwrap_or("render-pdf")));
+        print!(
+            "{}",
+            help_text(args.first().map(String::as_str).unwrap_or("render-pdf"))
+        );
         return;
     }
 
@@ -70,10 +73,13 @@ fn main() {
 
     let mut idx = 0;
     let mut ok_count = 0;
+    let mut failed = 0;
     let reader: Box<dyn BufRead> = match input_file {
-        Some(path) => Box::new(io::BufReader::new(
-            File::open(&path).unwrap_or_else(|e| panic!("Failed to open input file '{}': {}", path, e)),
-        )),
+        Some(path) => {
+            Box::new(io::BufReader::new(File::open(&path).unwrap_or_else(|e| {
+                panic!("Failed to open input file '{}': {}", path, e)
+            })))
+        }
         None => Box::new(io::BufReader::new(io::stdin())),
     };
     for line in reader.lines() {
@@ -92,15 +98,20 @@ fn main() {
                 println!("OK  {:4} {}", idx, expr);
             }
             Err(e) => {
+                failed += 1;
                 eprintln!("ERR {:4} {} — {}", idx, expr, e);
             }
         }
     }
 
     println!(
-        "\nProcessed {} formula(s), wrote {} PDF(s) to {}/",
-        idx, ok_count, output_dir
+        "\nProcessed {} formula(s), wrote {} PDF(s), failed {}.",
+        idx, ok_count, failed
     );
+
+    if failed > 0 {
+        std::process::exit(1);
+    }
 }
 
 fn pdf_formula(
@@ -116,12 +127,7 @@ fn pdf_formula(
 
 fn default_font_dir() -> String {
     const MARKER: &str = "KaTeX_Main-Regular.ttf";
-    let candidates = [
-        "fonts",
-        "../fonts",
-        "../../fonts",
-        "../../../fonts",
-    ];
+    let candidates = ["fonts", "../fonts", "../../fonts", "../../../fonts"];
     for c in &candidates {
         let p = std::path::Path::new(c);
         if p.join(MARKER).is_file() {

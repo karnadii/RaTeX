@@ -251,10 +251,8 @@ fn render_to_png_preserves_emoji_raster_alpha() {
 
 #[test]
 fn render_to_png_preserves_textcolor_hex_alpha() {
-    let Some(png) = render_latex(
-        r"\textcolor{#ff000010}{x}",
-        Color::new(0.0, 0.0, 0.0, 0.0),
-    ) else {
+    let Some(png) = render_latex(r"\textcolor{#ff000010}{x}", Color::new(0.0, 0.0, 0.0, 0.0))
+    else {
         eprintln!("SKIP transparent_background: KaTeX font_dir missing");
         return;
     };

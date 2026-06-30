@@ -1,5 +1,5 @@
 #!/bin/sh
-# Pre-commit hook: run cargo clippy before allowing commit.
+# Pre-commit hook: run cargo fmt and cargo clippy before allowing commit.
 # Install: git config core.hooksPath .githooks  (from repo root)
 # Or: cp .githooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 
@@ -13,6 +13,9 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "Checking cargo fmt..."
+cargo fmt --all -- --check
+
 echo "Running cargo clippy..."
 cargo clippy --workspace --exclude ratex-gtk4 -- -D warnings
 
@@ -24,4 +27,4 @@ else
   echo "Skipping ratex-gtk4 clippy: GTK4/graphene pkg-config files were not found." >&2
   echo "Install GTK4 development packages to check the GTK crate locally." >&2
 fi
-echo "Clippy passed."
+echo "Formatting and clippy checks passed."
