@@ -89,6 +89,8 @@ class RaTeXPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(RaTeXPainter oldDelegate) =>
+      // Identity on displayList is safe: _RaTeXWidgetState.build constructs
+      // a fresh instance only when the parse result actually changed.
       oldDelegate.displayList != displayList ||
       oldDelegate.fontSize != fontSize ||
       oldDelegate.haloColor != haloColor ||
@@ -152,52 +154,50 @@ class RaTeXPainter extends CustomPainter {
     // Draw the actual glyph using the bundled KaTeX font via ParagraphBuilder.
     final (:family, :weight, :style) = _parseFontId(g.font);
     final sizePx = _em(g.scale);
+    final charStr = String.fromCharCode(g.charCode);
+    final originX = _em(g.x);
+    final yPx = _em(g.y);
 
-    // When family is null (CJK/emoji), omit fontFamily so the engine falls
-    // back to the system default font (PingFang / Apple Color Emoji on iOS,
-    // platform system font on Android).
-    final styleArgs = <ui.TextStyle>[];
+    final ps = ui.ParagraphStyle(
+      fontFamily: family,
+      fontWeight: weight,
+      fontStyle: style,
+      fontSize: sizePx,
+      textAlign: TextAlign.left,
+    );
+    const constraints = ui.ParagraphConstraints(width: double.infinity);
+
+    // Two paragraphs are needed because pushing `foreground` (halo) onto a
+    // single paragraph suppresses `color` in `TextStyle.merge`, so one
+    // builder can't carry both halo and fill. Layout metrics are identical
+    // (color/foreground don't affect glyph shape) so the offset math is.
     if (strokeColor != null && strokeWidth > 0) {
       // Halo stroke is in LOGICAL pixels (NOT em-scaled) — matches
       // `paintTextWithHalo` in plotter, which uses a fixed
       // `strokeWidth: 3.0` regardless of the text size. Scaling by
       // em would blow the halo up at every `fontSize` step (3 × 20pt
       // = 60px stroke, etc.).
-      styleArgs.add(ui.TextStyle(
-        foreground: Paint()
-          ..color = strokeColor
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = strokeWidth
-          ..strokeJoin = StrokeJoin.round
-          ..isAntiAlias = true,
-        fontFamily: family,
-        fontWeight: weight,
-        fontStyle: style,
-        fontSize: sizePx,
-      ));
+      final hb = ui.ParagraphBuilder(ps)
+        ..pushStyle(ui.TextStyle(
+          foreground: Paint()
+            ..color = strokeColor
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = strokeWidth
+            ..strokeJoin = StrokeJoin.round
+            ..isAntiAlias = true,
+        ));
+      hb.addText(charStr);
+      final hp = hb.build()..layout(constraints);
+      canvas.drawParagraph(
+        hp,
+        Offset(originX, yPx - hp.alphabeticBaseline),
+      );
     }
-    styleArgs.add(ui.TextStyle(
-      color: _color(g.color),
-      fontFamily: family,
-      fontWeight: weight,
-      fontStyle: style,
-      fontSize: sizePx,
-    ));
 
-    final pb = ui.ParagraphBuilder(ui.ParagraphStyle(
-      fontFamily: family,
-      fontWeight: weight,
-      fontStyle: style,
-      fontSize: sizePx,
-      textAlign: TextAlign.left,
-    ));
-    for (final s in styleArgs) {
-      pb.pushStyle(s);
-    }
-    pb.addText(String.fromCharCode(g.charCode));
-
-    final paragraph = pb.build()
-      ..layout(const ui.ParagraphConstraints(width: double.infinity));
+    final fb = ui.ParagraphBuilder(ps)
+      ..pushStyle(ui.TextStyle(color: _color(g.color)));
+    fb.addText(charStr);
+    final fp = fb.build()..layout(constraints);
 
     // g.y is the alphabetic baseline measured downward from the top of the
     // bounding box (same coordinate convention as the web canvas renderer
@@ -205,12 +205,30 @@ class RaTeXPainter extends CustomPainter {
     // drawParagraph places the top-left of the paragraph box at the given
     // offset, so subtract the paragraph's alphabeticBaseline to align.
     canvas.drawParagraph(
-      paragraph,
-      Offset(_em(g.x), _em(g.y) - paragraph.alphabeticBaseline),
+      fp,
+      Offset(originX, yPx - fp.alphabeticBaseline),
     );
   }
 
   // MARK: Line / Rect / Path
+
+  // ponytail: dash geometry is shared by halo + fill passes — keeping it in
+  // one helper means changing the dash pattern updates both at once.
+  ui.Path _buildDashedLinePath(LineItem l) {
+    final t = math.max(0.5, _em(l.thickness));
+    final dashLen = t * 3;
+    final x0 = _em(l.x);
+    final y0 = _em(l.y);
+    final endX = x0 + _em(l.width);
+    final path = ui.Path();
+    var cx = x0;
+    while (cx < endX) {
+      path.moveTo(cx, y0);
+      path.lineTo(math.min(cx + dashLen, endX), y0);
+      cx += dashLen * 2;
+    }
+    return path;
+  }
 
   void _drawLine(
     Canvas canvas,
@@ -220,26 +238,18 @@ class RaTeXPainter extends CustomPainter {
   }) {
     final t = math.max(0.5, _em(l.thickness));
     final halfT = t / 2;
+    final x0 = _em(l.x);
+    final y0 = _em(l.y);
+    final widthPx = _em(l.width);
     if (l.dashed) {
+      final path = _buildDashedLinePath(l);
       if (strokeColor != null && strokeWidth > 0) {
         // Halo over a dashed line: stroke the same dash pattern with a
         // wider, rounded pen so the contrast is consistent across the
         // gap and the dash. `strokeWidth` is in logical pixels (NOT
         // em-scaled) — same as `paintTextWithHalo`.
-        final haloPath = ui.Path();
-        final dashLen = t * 3;
-        final x0 = _em(l.x);
-        final y0 = _em(l.y);
-        final endX = x0 + _em(l.width);
-        var cx = x0;
-        while (cx < endX) {
-          haloPath.moveTo(cx, y0);
-          final nx = math.min(cx + dashLen, endX);
-          haloPath.lineTo(nx, y0);
-          cx += dashLen * 2;
-        }
         canvas.drawPath(
-          haloPath,
+          path,
           Paint()
             ..color = strokeColor
             ..style = PaintingStyle.stroke
@@ -252,33 +262,24 @@ class RaTeXPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = t
         ..strokeCap = StrokeCap.butt;
-      final dashLen = t * 3;
-      final path = ui.Path();
-      final x0 = _em(l.x);
-      final y0 = _em(l.y);
-      final endX = x0 + _em(l.width);
-      var cx = x0;
-      while (cx < endX) {
-        path.moveTo(cx, y0);
-        final nx = math.min(cx + dashLen, endX);
-        path.lineTo(nx, y0);
-        cx += dashLen * 2;
-      }
       canvas.drawPath(path, paint);
     } else {
       if (strokeColor != null && strokeWidth > 0) {
-        canvas.drawRect(
-          Rect.fromLTWH(_em(l.x), _em(l.y) - halfT, _em(l.width), t),
+        // drawLine with strokeWidth = t + haloWidth → halo extends
+        // haloWidth/2 on each side of the line. drawRect(stroke) would
+        // also paint vertical stubs at the line ends.
+        canvas.drawLine(
+          Offset(x0, y0),
+          Offset(x0 + widthPx, y0),
           Paint()
             ..color = strokeColor
             ..style = PaintingStyle.stroke
-            ..strokeWidth = strokeWidth
+            ..strokeWidth = t + strokeWidth
             ..isAntiAlias = true,
         );
       }
       canvas.drawRect(
-          Rect.fromLTWH(_em(l.x), _em(l.y) - halfT, _em(l.width), t),
-          _paint(l.color));
+          Rect.fromLTWH(x0, y0 - halfT, widthPx, t), _paint(l.color));
     }
   }
 
@@ -289,12 +290,19 @@ class RaTeXPainter extends CustomPainter {
     double strokeWidth = 0,
   }) {
     if (strokeColor != null && strokeWidth > 0) {
+      // Fill a rect expanded by strokeWidth/2 on each side so the halo
+      // hugs the rectangle silhouette uniformly. drawRect(stroke) would
+      // halo all four edges and read as a stroked border.
+      final pad = strokeWidth / 2;
       canvas.drawRect(
-        Rect.fromLTWH(_em(r.x), _em(r.y), _em(r.width), _em(r.height)),
+        Rect.fromLTWH(
+          _em(r.x) - pad,
+          _em(r.y) - pad,
+          _em(r.width) + pad * 2,
+          _em(r.height) + pad * 2,
+        ),
         Paint()
           ..color = strokeColor
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = strokeWidth
           ..isAntiAlias = true,
       );
     }
