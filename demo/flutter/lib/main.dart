@@ -40,7 +40,6 @@ Widget buildInlineMath(
             fontSize: mathFontSize,
             displayMode: false,
             onError: (e) => debugPrint('RaTeX inline error: $e'),
-            loading: const SizedBox.shrink(),
           ),
         ),
       );
@@ -390,7 +389,6 @@ class _ShowcaseCard extends StatelessWidget {
                     latex: item.latex,
                     fontSize: 20,
                     onError: (e) => debugPrint('RaTeX showcase error: $e'),
-                    loading: const SizedBox.shrink(),
                   ),
                 ),
               ),
@@ -443,7 +441,6 @@ class _FormulaCard extends StatelessWidget {
         fontSize: fontSize,
         displayMode: displayMode,
         onError: (e) => debugPrint('RaTeX error: $e'),
-        loading: const SizedBox.shrink(),
       ),
     );
   }

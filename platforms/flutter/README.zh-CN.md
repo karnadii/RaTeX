@@ -215,7 +215,6 @@ Widget buildInlineMath(String text, {double mathFontSize = 18, TextStyle? textSt
           latex: parts[i],
           fontSize: mathFontSize,
           onError: (e) => debugPrint('RaTeX inline error: $e'),
-          loading: const SizedBox.shrink(),
         ),
       ));
     }

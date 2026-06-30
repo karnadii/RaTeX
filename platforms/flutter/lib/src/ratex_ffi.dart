@@ -11,7 +11,6 @@ import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
-import 'ratex_backend.dart';
 import 'display_list.dart';
 import 'ratex_exception.dart';
 
@@ -72,54 +71,32 @@ typedef _GetLastErrorDart = Pointer<Utf8> Function();
 // MARK: - Library loader
 
 DynamicLibrary _openLib() {
-  if (Platform.isAndroid) {
-    return DynamicLibrary.open('libratex_ffi.so');
-  }
-  if (Platform.isIOS || Platform.isMacOS) {
-    // iOS: static library is force-loaded into the process via CocoaPods
-    // macOS: dynamic library is linked via vendored_libraries in the podspec
-    return DynamicLibrary.process();
-  }
-  if (Platform.isWindows) {
-    return DynamicLibrary.open('ratex_ffi.dll');
-  }
-  if (Platform.isLinux) {
+  // iOS: static library is force-loaded into the process via CocoaPods
+  // macOS: dynamic library is linked via vendored_libraries in the podspec
+  if (Platform.isIOS || Platform.isMacOS) return DynamicLibrary.process();
+  if (Platform.isWindows) return DynamicLibrary.open('ratex_ffi.dll');
+  if (Platform.isAndroid || Platform.isLinux) {
     return DynamicLibrary.open('libratex_ffi.so');
   }
   throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
 }
 
-// MARK: - FFI bindings (lazy singleton)
+// MARK: - FFI bindings (lazy)
 
-class _RaTeXFFI {
-  static final _RaTeXFFI _instance = _RaTeXFFI._();
-  factory _RaTeXFFI() => _instance;
-
-  _RaTeXFFI._() {
-    final lib = _openLib();
-    _parseAndLayout = lib.lookupFunction<_ParseAndLayoutC, _ParseAndLayoutDart>(
+// ponytail: lookup happens once at first access; no wrapper class needed.
+final _ParseAndLayoutDart _parseAndLayout = _openLib()
+    .lookupFunction<_ParseAndLayoutC, _ParseAndLayoutDart>(
         'ratex_parse_and_layout');
-    _freeDisplayList =
-        lib.lookupFunction<_FreeDisplayListC, _FreeDisplayListDart>(
-            'ratex_free_display_list');
-    _getLastError = lib.lookupFunction<_GetLastErrorC, _GetLastErrorDart>(
-        'ratex_get_last_error');
-  }
-
-  late final _ParseAndLayoutDart _parseAndLayout;
-  late final _FreeDisplayListDart _freeDisplayList;
-  late final _GetLastErrorDart _getLastError;
-}
+final _FreeDisplayListDart _freeDisplayList = _openLib()
+    .lookupFunction<_FreeDisplayListC, _FreeDisplayListDart>(
+        'ratex_free_display_list');
+final _GetLastErrorDart _getLastError = _openLib()
+    .lookupFunction<_GetLastErrorC, _GetLastErrorDart>('ratex_get_last_error');
 
 // MARK: - Public wrapper
 
-RaTeXBackend createBackend() => RaTeXFfi();
-
 /// Dart FFI wrapper around the RaTeX C ABI.
-class RaTeXFfi implements RaTeXBackend {
-  final _RaTeXFFI _ffi = _RaTeXFFI();
-
-  @override
+class RaTeXFfi {
   DisplayList parseAndLayout(
     String latex, {
     bool displayMode = true,
@@ -137,9 +114,9 @@ class RaTeXFfi implements RaTeXBackend {
       colorPtr.ref.a = color.a;
       optsPtr.ref.color = colorPtr;
 
-      final result = _ffi._parseAndLayout(inputPtr, optsPtr);
+      final result = _parseAndLayout(inputPtr, optsPtr);
       if (result.errorCode != 0) {
-        final errPtr = _ffi._getLastError();
+        final errPtr = _getLastError();
         final tail = errPtr.address == 0
             ? 'no message (code ${result.errorCode})'
             : errPtr.toDartString();
@@ -151,7 +128,7 @@ class RaTeXFfi implements RaTeXBackend {
         );
       }
       final json = result.data.toDartString();
-      _ffi._freeDisplayList(result.data);
+      _freeDisplayList(result.data);
 
       final decoded = jsonDecode(json) as Map<String, dynamic>;
       return DisplayList.fromJson(decoded);
@@ -162,3 +139,5 @@ class RaTeXFfi implements RaTeXBackend {
     }
   }
 }
+
+RaTeXFfi createBackend() => RaTeXFfi();

@@ -55,7 +55,6 @@ class GlyphPathItem extends DisplayItem {
   final double x, y, scale;
   final String font;
   final int charCode;
-  final List<PathCommand> commands;
   final RaTeXColor color;
 
   const GlyphPathItem({
@@ -64,7 +63,6 @@ class GlyphPathItem extends DisplayItem {
     required this.scale,
     required this.font,
     required this.charCode,
-    required this.commands,
     required this.color,
   });
 
@@ -74,10 +72,6 @@ class GlyphPathItem extends DisplayItem {
         scale: (j['scale'] as num).toDouble(),
         font: j['font'] as String,
         charCode: j['char_code'] as int,
-        commands: (j['commands'] as List?)
-                ?.map((e) => PathCommand.fromJson(e as Map<String, dynamic>))
-                .toList() ??
-            [],
         color: RaTeXColor.fromJson(j['color'] as Map<String, dynamic>),
       );
 }

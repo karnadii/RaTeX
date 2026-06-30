@@ -19,8 +19,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_web_plugins:
-    sdk: flutter
   ffi: ^2.1.0
   web: ^1.1.0
 
@@ -49,14 +47,10 @@ flutter:
       linux:
         pluginClass: RatexFlutterPlugin
         fileName: ratex_flutter.dart
-      web:
-        pluginClass: RatexFlutterWeb
-        fileName: ratex_flutter.dart
 
   assets:
     - web/pkg/ratex_wasm.js
     - web/pkg/ratex_wasm_bg.wasm
-    - web/ratex_loader.js
 
   # KaTeX fonts bundled with the plugin.
   # GlyphPath items in the DisplayList carry a font ID (e.g. "Math-Italic")

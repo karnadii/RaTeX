@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'src/display_list.dart';
-import 'src/ratex_backend.dart';
 import 'src/ratex_ffi.dart' if (dart.library.js_interop) 'src/ratex_web.dart'
     as backend;
 import 'src/ratex_native_init.dart'
@@ -42,7 +41,10 @@ class RaTeXEngine {
   static final RaTeXEngine instance = RaTeXEngine._();
   RaTeXEngine._();
 
-  final RaTeXBackend _backend = backend.createBackend();
+  // ponytail: only one consumer (instance.parseAndLayout); the impl class
+  // shape is enforced by the conditional import. dynamic beats an interface
+  // with one method.
+  final dynamic _backend = backend.createBackend();
 
   DisplayList parseAndLayout(
     String latex, {
@@ -55,12 +57,6 @@ class RaTeXEngine {
         color: _toRaTeXColor(color),
       );
 }
-
-typedef RaTeXParseAndLayoutArgs = ({
-  String latex,
-  bool displayMode,
-  int colorValue,
-});
 
 @immutable
 class RaTeXParseAndLayoutIsolateArgs {
@@ -76,28 +72,12 @@ class RaTeXParseAndLayoutIsolateArgs {
   final int? colorArgb;
 }
 
-DisplayList ratexParseAndLayoutInIsolate(Object args) {
-  final RaTeXParseAndLayoutIsolateArgs resolved = switch (args) {
-    final RaTeXParseAndLayoutIsolateArgs a => a,
-    (:final String latex, :final bool displayMode, :final int colorValue) =>
-      RaTeXParseAndLayoutIsolateArgs(
-        latex: latex,
-        displayMode: displayMode,
-        colorArgb: colorValue,
-      ),
-    _ => throw ArgumentError.value(
-        args,
-        'args',
-        'Expected RaTeXParseAndLayoutIsolateArgs or '
-            '({String latex, bool displayMode, int colorValue}).',
-      ),
-  };
-  final color = resolved.colorArgb == null
-      ? const Color(0xFF000000)
-      : Color(resolved.colorArgb!);
+DisplayList ratexParseAndLayoutInIsolate(RaTeXParseAndLayoutIsolateArgs args) {
+  final color =
+      args.colorArgb == null ? const Color(0xFF000000) : Color(args.colorArgb!);
   return RaTeXEngine.instance.parseAndLayout(
-    resolved.latex,
-    displayMode: resolved.displayMode,
+    args.latex,
+    displayMode: args.displayMode,
     color: color,
   );
 }
@@ -109,7 +89,6 @@ class RaTeXWidget extends StatefulWidget {
   final double fontSize;
   final bool displayMode;
   final Color? color;
-  final Widget? loading;
   final void Function(RaTeXException)? onError;
 
   /// Optional contrasting color drawn as a glyph-level stroke
@@ -132,7 +111,6 @@ class RaTeXWidget extends StatefulWidget {
     this.color,
     this.haloColor,
     this.haloWidth = 3.0,
-    this.loading,
     this.onError,
   });
 
@@ -218,7 +196,7 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
     }
     final dl = _displayList;
     if (dl == null) {
-      return widget.loading ?? const SizedBox.shrink();
+      return const SizedBox.shrink();
     }
     final painter = RaTeXPainter(
       displayList: dl,
