@@ -1,5 +1,17 @@
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    # The web entrypoint imports `flutter_web_plugins` for the
+    # `Registrar` API but the dep is intentionally left implicit
+    # (Flutter injects it on web targets). The web entrypoint is
+    # only compiled when the host app targets web, so the
+    # `depend_on_referenced_packages` lint surfaces as a false
+    # positive when the host (e.g. mathnote) analyzes the package
+    # on a non-web target. Without this exclude, host CI gates on
+    # `--fatal-infos` for an issue the host cannot reach.
+    - web/ratex_flutter_web.dart
+
 linter:
   rules:
     - avoid_print
