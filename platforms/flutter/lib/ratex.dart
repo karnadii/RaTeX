@@ -122,6 +122,7 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
   DisplayList? _displayList;
   RaTeXException? _error;
   Color? _lastInheritedColor;
+  int _renderGeneration = 0;
 
   @override
   void initState() {
@@ -162,6 +163,7 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
       DefaultTextStyle.of(context).style.color ?? Colors.black;
 
   Future<void> _render() async {
+    final generation = ++_renderGeneration;
     try {
       final resolvedColor = widget.color ?? _inheritedColor;
       final dl = await compute(
@@ -172,19 +174,19 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
           colorArgb: resolvedColor.value, // ignore: deprecated_member_use
         ),
       );
-      if (mounted) {
-        setState(() {
-          _displayList = dl;
-          _error = null;
-        });
-      }
+      // Drop stale results: only the most recent render may update state.
+      if (!mounted || generation != _renderGeneration) return;
+      setState(() {
+        _displayList = dl;
+        _error = null;
+      });
     } on RaTeXException catch (e) {
+      // Stale errors should not clobber the current state or surface to callers.
+      if (!mounted || generation != _renderGeneration) return;
       widget.onError?.call(e);
-      if (mounted) {
-        setState(() {
-          _error = e;
-        });
-      }
+      setState(() {
+        _error = e;
+      });
     }
   }
 
