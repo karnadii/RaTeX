@@ -12,6 +12,16 @@ import 'src/ratex_painter.dart';
 export 'src/display_list.dart';
 export 'src/ratex_exception.dart';
 
+/// Coerces any render-time failure into a [RaTeXException] so the
+/// `onError` callback and raw-value fallback receive a uniform type.
+/// A [RaTeXException] is passed through unchanged; everything else
+/// (`StateError`, JS-interop failures, missing-library errors) is
+/// wrapped with its string representation so the message survives.
+RaTeXException coerceRenderError(Object error) {
+  if (error is RaTeXException) return error;
+  return RaTeXException(error.toString());
+}
+
 RaTeXColor _toRaTeXColor(Color color) => RaTeXColor(
       color.red / 255.0, // ignore: deprecated_member_use
       color.green / 255.0, // ignore: deprecated_member_use
@@ -186,6 +196,19 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
       widget.onError?.call(e);
       setState(() {
         _error = e;
+      });
+    } catch (e) {
+      // Phase 7C: non-RaTeXException failures (StateError, JS-interop
+      // errors, missing native libs) previously bypassed onError and
+      // the raw-value fallback. Coerce into RaTeXException so they
+      // funnel into the same path. A bare catch is broader than
+      // `on Exception`/`on Error` but simpler — any render failure
+      // should fall back, not crash the app.
+      if (!mounted || generation != _renderGeneration) return;
+      final wrapped = coerceRenderError(e);
+      widget.onError?.call(wrapped);
+      setState(() {
+        _error = wrapped;
       });
     }
   }
