@@ -12,6 +12,47 @@ import 'src/ratex_painter.dart';
 export 'src/display_list.dart';
 export 'src/ratex_exception.dart';
 
+/// Process-scoped LRU cache for parsed-and-laid-out [DisplayList]s.
+/// Keyed on `(latex, fontSize, displayMode)` — color is intentionally
+/// excluded because it's applied at paint time, not layout time.
+/// Two formulas with the same source/fontSize/displayMode but different
+/// colors share a cache entry (the paint pass overrides color anyway).
+/// Best-effort: a miss falls through to the isolate renderer.
+class RaTeXRenderCache {
+  RaTeXRenderCache({int maxSize = 64}) : _maxSize = maxSize;
+
+  final int _maxSize;
+  final _cache = <String, DisplayList>{};
+
+  String _key(String latex, double fontSize, bool displayMode) =>
+      '$latex\x00$fontSize\x00$displayMode';
+
+  DisplayList? get(String latex, double fontSize, bool displayMode) {
+    final key = _key(latex, fontSize, displayMode);
+    final dl = _cache.remove(key);
+    if (dl != null) _cache[key] = dl; // move to end (most-recently-used)
+    return dl;
+  }
+
+  void put(String latex, double fontSize, bool displayMode, DisplayList dl) {
+    final key = _key(latex, fontSize, displayMode);
+    _cache.remove(key); // remove old entry if present
+    _cache[key] = dl;
+    if (_cache.length > _maxSize) {
+      _cache.remove(_cache.keys.first); // evict least-recently-used
+    }
+  }
+
+  void clear() => _cache.clear();
+
+  int get length => _cache.length;
+}
+
+/// Process-wide render cache shared by all [RaTeXWidget] instances.
+/// ponytail: a global singleton is the simplest process-scoped cache.
+/// If isolates ever need their own cache, pass it via the isolate args.
+final raTeXRenderCache = RaTeXRenderCache();
+
 /// Coerces any render-time failure into a [RaTeXException] so the
 /// `onError` callback and raw-value fallback receive a uniform type.
 /// A [RaTeXException] is passed through unchanged; everything else
@@ -174,6 +215,20 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
 
   Future<void> _render() async {
     final generation = ++_renderGeneration;
+    // Check the render cache first — a hit skips the isolate hop.
+    final cached = raTeXRenderCache.get(
+      widget.latex,
+      widget.fontSize,
+      widget.displayMode,
+    );
+    if (cached != null) {
+      if (!mounted || generation != _renderGeneration) return;
+      setState(() {
+        _displayList = cached;
+        _error = null;
+      });
+      return;
+    }
     try {
       final resolvedColor = widget.color ?? _inheritedColor;
       final dl = await compute(
@@ -186,6 +241,13 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
       );
       // Drop stale results: only the most recent render may update state.
       if (!mounted || generation != _renderGeneration) return;
+      // Cache the result for future renders.
+      raTeXRenderCache.put(
+        widget.latex,
+        widget.fontSize,
+        widget.displayMode,
+        dl,
+      );
       setState(() {
         _displayList = dl;
         _error = null;
@@ -221,7 +283,10 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
     }
     final dl = _displayList;
     if (dl == null) {
-      return const SizedBox.shrink();
+      // Reserve vertical space during loading so surrounding widgets
+      // don't shift when the formula pops in. 1.4x font size is a
+      // reasonable line-height estimate for a single-line formula.
+      return SizedBox(height: widget.fontSize * 1.4);
     }
     final painter = RaTeXPainter(
       displayList: dl,
