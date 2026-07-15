@@ -286,7 +286,10 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
       // Reserve vertical space during loading so surrounding widgets
       // don't shift when the formula pops in. 1.4x font size is a
       // reasonable line-height estimate for a single-line formula.
-      return SizedBox(height: widget.fontSize * 1.4);
+      return Semantics(
+        label: widget.latex,
+        child: SizedBox(height: widget.fontSize * 1.4),
+      );
     }
     final painter = RaTeXPainter(
       displayList: dl,
@@ -294,10 +297,13 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
       haloColor: widget.haloColor,
       haloWidth: widget.haloWidth,
     );
-    return SizedBox(
-      width: painter.widthPx,
-      height: painter.totalHeightPx,
-      child: CustomPaint(painter: painter),
+    return Semantics(
+      label: widget.latex,
+      child: SizedBox(
+        width: painter.widthPx,
+        height: painter.totalHeightPx,
+        child: CustomPaint(painter: painter),
+      ),
     );
   }
 }
