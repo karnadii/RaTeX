@@ -18,6 +18,8 @@ pub struct LayoutOptions {
     /// This is layout state propagated through `\tiny` ... `\Huge`; callers
     /// should normally leave it at its default.
     pub explicit_size_multiplier: f64,
+    /// Maximum automatic wrapping width in em units. `None` disables wrapping.
+    pub max_width_em: Option<f64>,
 }
 
 impl Default for LayoutOptions {
@@ -29,6 +31,7 @@ impl Default for LayoutOptions {
             leftright_delim_height: None,
             inter_glyph_kern_em: 0.0,
             explicit_size_multiplier: 1.0,
+            max_width_em: None,
         }
     }
 }
@@ -50,6 +53,7 @@ impl LayoutOptions {
             leftright_delim_height: self.leftright_delim_height,
             inter_glyph_kern_em: self.inter_glyph_kern_em,
             explicit_size_multiplier: self.explicit_size_multiplier,
+            max_width_em: self.max_width_em,
         }
     }
 
@@ -61,6 +65,7 @@ impl LayoutOptions {
             leftright_delim_height: self.leftright_delim_height,
             inter_glyph_kern_em: self.inter_glyph_kern_em,
             explicit_size_multiplier: self.explicit_size_multiplier,
+            max_width_em: self.max_width_em,
         }
     }
 
@@ -74,6 +79,13 @@ impl LayoutOptions {
     pub(crate) fn with_explicit_size_multiplier(&self, multiplier: f64) -> Self {
         Self {
             explicit_size_multiplier: multiplier,
+            ..self.clone()
+        }
+    }
+
+    pub fn with_max_width_em(&self, max_width_em: Option<f64>) -> Self {
+        Self {
+            max_width_em,
             ..self.clone()
         }
     }

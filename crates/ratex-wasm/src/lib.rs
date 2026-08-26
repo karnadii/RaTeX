@@ -30,6 +30,8 @@ export interface RenderLatexOptions {
     displayMode?: boolean;
     /** Default formula color as a supported color string or normalized RGBA components. */
     color?: RenderColor;
+    /** Maximum automatic wrapping width in em units. Omit to disable wrapping. */
+    maxWidthEm?: number;
 }
 "#;
 
@@ -54,13 +56,15 @@ pub fn render_latex(
     latex: &str,
     color: Option<String>,
     displayMode: Option<bool>,
+    max_width_em: Option<f64>,
 ) -> Result<String, JsValue> {
     let color = color
         .as_deref()
         .map(parse_color_string)
         .transpose()
         .map_err(|error| JsValue::from_str(&error))?;
-    render_latex_impl(latex, color, displayMode).map_err(|error| JsValue::from_str(&error))
+    render_latex_impl(latex, color, displayMode, max_width_em)
+        .map_err(|error| JsValue::from_str(&error))
 }
 
 /// Parse LaTeX using a forward-compatible options object.
@@ -72,15 +76,17 @@ pub fn render_latex_with_options(
     latex: &str,
     options: Option<JsRenderLatexOptions>,
 ) -> Result<String, JsValue> {
-    let (color, display_mode) =
+    let (color, display_mode, max_width_em) =
         parse_render_options(options).map_err(|error| JsValue::from_str(&error))?;
-    render_latex_impl(latex, color, display_mode).map_err(|error| JsValue::from_str(&error))
+    render_latex_impl(latex, color, display_mode, max_width_em)
+        .map_err(|error| JsValue::from_str(&error))
 }
 
 fn render_latex_impl(
     latex: &str,
     color: Option<Color>,
     display_mode: Option<bool>,
+    max_width_em: Option<f64>,
 ) -> Result<String, String> {
     let nodes = parse(latex).map_err(|e| e.to_string())?;
     let style = if display_mode.unwrap_or(true) {
@@ -88,7 +94,9 @@ fn render_latex_impl(
     } else {
         MathStyle::Text
     };
-    let options = LayoutOptions::default().with_style(style);
+    let options = LayoutOptions::default()
+        .with_style(style)
+        .with_max_width_em(max_width_em.filter(|width| width.is_finite() && *width > 0.0));
     let options = if let Some(color) = color {
         options.with_color(color)
     } else {
@@ -110,9 +118,9 @@ fn render_latex_impl(
 
 fn parse_render_options(
     options: Option<JsRenderLatexOptions>,
-) -> Result<(Option<Color>, Option<bool>), String> {
+) -> Result<(Option<Color>, Option<bool>, Option<f64>), String> {
     let Some(options) = options else {
-        return Ok((None, None));
+        return Ok((None, None, None));
     };
     let options: JsValue = options.into();
     if !options.is_object() {
@@ -133,7 +141,16 @@ fn parse_render_options(
         None => None,
     };
 
-    Ok((color, display_mode))
+    let max_width_em = match optional_property(&options, "maxWidthEm")? {
+        Some(value) => Some(
+            value
+                .as_f64()
+                .ok_or_else(|| "invalid options.maxWidthEm: expected a number".to_string())?,
+        ),
+        None => None,
+    };
+
+    Ok((color, display_mode, max_width_em))
 }
 
 fn optional_property(target: &JsValue, name: &str) -> Result<Option<JsValue>, String> {
@@ -284,9 +301,9 @@ mod tests {
     #[test]
     fn display_mode_defaults_to_display_and_supports_inline() {
         let latex = r"\frac{1}{2}";
-        let default_display = render_latex_impl(latex, None, None).unwrap();
-        let explicit_display = render_latex_impl(latex, None, Some(true)).unwrap();
-        let inline = render_latex_impl(latex, None, Some(false)).unwrap();
+        let default_display = render_latex_impl(latex, None, None, None).unwrap();
+        let explicit_display = render_latex_impl(latex, None, Some(true), None).unwrap();
+        let inline = render_latex_impl(latex, None, Some(false), None).unwrap();
 
         assert_eq!(default_display, explicit_display);
         assert_ne!(explicit_display, inline);

@@ -9,8 +9,8 @@ extension type _RatexModule._(JSObject _) implements JSObject {
   external JSPromise init();
 
   @JS('renderLatex')
-  external JSString renderLatex(
-      JSString latex, JSBoolean? displayMode, JSString? color);
+  external JSString renderLatex(JSString latex, JSString? color,
+      JSBoolean? displayMode, JSNumber? maxWidthEm);
 }
 
 @JS('renderLatex')
@@ -23,9 +23,9 @@ Future<void> initRaTeXWeb() async {
         .toDart as JSObject;
     final mod = _RatexModule._(rawModule);
     await mod.init().toDart;
-    _globalRenderLatex =
-        ((JSString latex, JSBoolean? displayMode, JSString? color) =>
-            mod.renderLatex(latex, displayMode, color)).toJS;
+    _globalRenderLatex = ((JSString latex, JSString? color,
+            JSBoolean? displayMode, JSNumber? maxWidthEm) =>
+        mod.renderLatex(latex, color, displayMode, maxWidthEm)).toJS;
   } catch (e) {
     throw StateError('RaTeX WASM initialization failed: $e');
   }

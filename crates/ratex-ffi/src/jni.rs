@@ -88,6 +88,7 @@ pub extern "system" fn Java_io_ratex_RaTeXEngine_nativeParseAndLayout(
         struct_size: std::mem::size_of::<RatexOptions>(),
         display_mode: if display_mode == JNI_TRUE { 1 } else { 0 },
         color: &color,
+        max_width_em: 0.0,
     };
     let result = unsafe { ratex_parse_and_layout(c_latex.as_ptr(), &opts) };
 

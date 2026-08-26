@@ -87,9 +87,13 @@ fn do_layout(
     latex_str: &str,
     style: MathStyle,
     color: ratex_types::color::Color,
+    max_width_em: Option<f64>,
 ) -> Result<String, String> {
     let nodes = parse(latex_str).map_err(|e| format!("parse error: {e}"))?;
-    let options = LayoutOptions::default().with_style(style).with_color(color);
+    let options = LayoutOptions::default()
+        .with_style(style)
+        .with_color(color)
+        .with_max_width_em(max_width_em);
     let layout_box = layout(&nodes, &options);
     let display_list = to_display_list(&layout_box);
     let value =
@@ -170,6 +174,8 @@ pub struct RatexOptions {
     /// Explicit LaTeX color commands like `\color{...}` / `\textcolor{...}{...}`
     /// still override this per subtree.
     pub color: *const RatexColor,
+    /// Maximum automatic wrapping width in em units. Non-positive disables wrapping.
+    pub max_width_em: f64,
 }
 
 /// Result returned by [`ratex_parse_and_layout`].
@@ -251,7 +257,20 @@ pub unsafe extern "C" fn ratex_parse_and_layout(
         }
     };
 
-    match do_layout(latex_str, style, color) {
+    let max_width_em = if opts.is_null() {
+        None
+    } else {
+        let opts_ref = unsafe { &*opts };
+        let width_size =
+            std::mem::offset_of!(RatexOptions, max_width_em) + std::mem::size_of::<f64>();
+        if opts_ref.struct_size >= width_size && opts_ref.max_width_em.is_finite() {
+            (opts_ref.max_width_em > 0.0).then_some(opts_ref.max_width_em)
+        } else {
+            None
+        }
+    };
+
+    match do_layout(latex_str, style, color, max_width_em) {
         Ok(json) => match CString::new(json) {
             Ok(cs) => RatexResult {
                 data: cs.into_raw(),
@@ -336,6 +355,7 @@ mod tests {
             struct_size: std::mem::size_of::<RatexOptions>(),
             display_mode,
             color: &black,
+            max_width_em: 0.0,
         };
         let result = unsafe { ratex_parse_and_layout(input.as_ptr(), &opts) };
         if result.error_code != 0 || result.data.is_null() {
@@ -369,12 +389,35 @@ mod tests {
     }
 
     #[test]
+    fn width_constraint_wraps_expression() {
+        let input = CString::new("a+b+c=d+e+f").unwrap();
+        let black = RatexColor::BLACK;
+        let opts = RatexOptions {
+            struct_size: std::mem::size_of::<RatexOptions>(),
+            display_mode: 1,
+            color: &black,
+            max_width_em: 2.0,
+        };
+        let result = unsafe { ratex_parse_and_layout(input.as_ptr(), &opts) };
+        assert_eq!(result.error_code, 0);
+        let json = unsafe { CStr::from_ptr(result.data) }
+            .to_str()
+            .unwrap()
+            .to_owned();
+        unsafe { ratex_free_display_list(result.data) };
+        let value: Value = serde_json::from_str(&json).unwrap();
+        assert!(value.get("width").and_then(Value::as_f64).unwrap() <= 2.0);
+        assert!(value.get("height").and_then(Value::as_f64).unwrap() > 0.0);
+    }
+
+    #[test]
     fn null_latex_returns_error() {
         let black = RatexColor::BLACK;
         let opts = RatexOptions {
             struct_size: std::mem::size_of::<RatexOptions>(),
             display_mode: 1,
             color: &black,
+            max_width_em: 0.0,
         };
         let result = unsafe { ratex_parse_and_layout(std::ptr::null(), &opts) };
         assert_ne!(result.error_code, 0);
@@ -421,6 +464,7 @@ mod tests {
             struct_size: std::mem::size_of::<RatexOptions>(),
             display_mode: 1,
             color: &blue,
+            max_width_em: 0.0,
         };
         let result = unsafe { ratex_parse_and_layout(input.as_ptr(), &opts) };
         assert_eq!(result.error_code, 0);
@@ -480,6 +524,7 @@ mod tests {
             struct_size: std::mem::size_of::<RatexOptions>(),
             display_mode: 1,
             color: &invalid,
+            max_width_em: 0.0,
         };
 
         let result = unsafe { ratex_parse_and_layout(input.as_ptr(), &opts) };
@@ -499,6 +544,7 @@ mod tests {
             struct_size: std::mem::size_of::<RatexOptions>(),
             display_mode: 1,
             color: std::ptr::null(),
+            max_width_em: 0.0,
         };
 
         let result = unsafe { ratex_parse_and_layout(input.as_ptr(), &opts) };

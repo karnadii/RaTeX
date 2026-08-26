@@ -5,7 +5,7 @@
  *
  * Usage:
  *   RatexColor black = {0, 0, 0, 1};
- *   RatexOptions opts = { sizeof(RatexOptions), 1, &black };
+ *   RatexOptions opts = { sizeof(RatexOptions), 1, &black, 0.0 };
  *   RatexResult r = ratex_parse_and_layout("\\frac{1}{2}", &opts);
  *   if (r.error_code == 0) {
  *       // r.data is a heap-allocated UTF-8 JSON string
@@ -14,6 +14,9 @@
  *       const char* err = ratex_get_last_error();
  *       fprintf(stderr, "RaTeX error: %s\n", err ? err : "(unknown)");
  *   }
+ *
+ * max_width_em <= 0 disables automatic line wrapping. Positive values limit
+ * automatic wrapping to the requested width in em units.
  *
  * display_mode values:
  *   1 — display (block) style, equivalent to $$...$$
@@ -86,6 +89,7 @@ typedef struct {
     size_t struct_size;
     int display_mode; /* 0 = inline ($...$), 1 = display block ($$...$$) */
     const RatexColor* color; /* NULL = default black */
+    double max_width_em; /* <= 0 = no automatic wrapping */
 } RatexOptions;
 
 /**

@@ -6,7 +6,7 @@ import 'ratex_exception.dart';
 
 @JS('renderLatex')
 external JSString _renderLatexGlobal(JSString latex,
-    [JSBoolean? displayMode, JSString? color]);
+    [JSString? color, JSBoolean? displayMode, JSNumber? maxWidthEm]);
 
 RaTeXWebBackend createBackend() => RaTeXWebBackend();
 
@@ -15,12 +15,17 @@ class RaTeXWebBackend {
     String latex, {
     bool displayMode = true,
     RaTeXColor color = const RaTeXColor(0, 0, 0, 1),
+    double? maxWidthEm,
   }) {
     final colorStr = _colorToCss(color);
     final JSString jsonString;
     try {
-      jsonString =
-          _renderLatexGlobal(latex.toJS, displayMode.toJS, colorStr.toJS);
+      jsonString = _renderLatexGlobal(
+        latex.toJS,
+        colorStr.toJS,
+        displayMode.toJS,
+        (maxWidthEm ?? 0).toJS,
+      );
     } catch (e) {
       throw RaTeXException('WASM renderLatex failed: $e');
     }

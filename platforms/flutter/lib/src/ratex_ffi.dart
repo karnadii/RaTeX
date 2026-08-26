@@ -42,6 +42,10 @@ final class RatexOptions extends Struct {
   external int displayMode;
 
   external Pointer<NativeRatexColor> color;
+
+  /// Maximum automatic wrapping width in em units. Zero disables wrapping.
+  @Double()
+  external double maxWidthEm;
 }
 
 /// Mirror of `RatexResult` from ratex.h.
@@ -56,13 +60,15 @@ final class RatexResult extends Struct {
 
 // MARK: - Native function type definitions
 
-typedef _ParseAndLayoutC    = RatexResult Function(Pointer<Utf8>, Pointer<RatexOptions>);
-typedef _ParseAndLayoutDart = RatexResult Function(Pointer<Utf8>, Pointer<RatexOptions>);
+typedef _ParseAndLayoutC = RatexResult Function(
+    Pointer<Utf8>, Pointer<RatexOptions>);
+typedef _ParseAndLayoutDart = RatexResult Function(
+    Pointer<Utf8>, Pointer<RatexOptions>);
 
-typedef _FreeDisplayListC    = Void Function(Pointer<Utf8>);
+typedef _FreeDisplayListC = Void Function(Pointer<Utf8>);
 typedef _FreeDisplayListDart = void Function(Pointer<Utf8>);
 
-typedef _GetLastErrorC    = Pointer<Utf8> Function();
+typedef _GetLastErrorC = Pointer<Utf8> Function();
 typedef _GetLastErrorDart = Pointer<Utf8> Function();
 
 // MARK: - Library loader
@@ -93,14 +99,18 @@ class _RaTeXFFI {
 
   _RaTeXFFI._() {
     final lib = _openLib();
-    _parseAndLayout  = lib.lookupFunction<_ParseAndLayoutC,    _ParseAndLayoutDart>('ratex_parse_and_layout');
-    _freeDisplayList = lib.lookupFunction<_FreeDisplayListC,   _FreeDisplayListDart>('ratex_free_display_list');
-    _getLastError    = lib.lookupFunction<_GetLastErrorC,      _GetLastErrorDart>('ratex_get_last_error');
+    _parseAndLayout = lib.lookupFunction<_ParseAndLayoutC, _ParseAndLayoutDart>(
+        'ratex_parse_and_layout');
+    _freeDisplayList =
+        lib.lookupFunction<_FreeDisplayListC, _FreeDisplayListDart>(
+            'ratex_free_display_list');
+    _getLastError = lib.lookupFunction<_GetLastErrorC, _GetLastErrorDart>(
+        'ratex_get_last_error');
   }
 
-  late final _ParseAndLayoutDart  _parseAndLayout;
+  late final _ParseAndLayoutDart _parseAndLayout;
   late final _FreeDisplayListDart _freeDisplayList;
-  late final _GetLastErrorDart    _getLastError;
+  late final _GetLastErrorDart _getLastError;
 }
 
 // MARK: - Public wrapper
@@ -109,7 +119,8 @@ class _RaTeXFFI {
 class RaTeXException implements Exception {
   final String message;
   const RaTeXException(this.message);
-  @override String toString() => 'RaTeXException: $message';
+  @override
+  String toString() => 'RaTeXException: $message';
 }
 
 /// Dart FFI wrapper around the RaTeX C ABI.
@@ -127,6 +138,7 @@ class RaTeXFfi {
     String latex, {
     bool displayMode = true,
     RaTeXColor color = const RaTeXColor(0, 0, 0, 1),
+    double? maxWidthEm,
   }) {
     final inputPtr = latex.toNativeUtf8();
     final optsPtr = calloc<RatexOptions>();
@@ -139,6 +151,7 @@ class RaTeXFfi {
       colorPtr.ref.b = color.b;
       colorPtr.ref.a = color.a;
       optsPtr.ref.color = colorPtr;
+      optsPtr.ref.maxWidthEm = maxWidthEm ?? 0.0;
 
       final result = _ffi._parseAndLayout(inputPtr, optsPtr);
       if (result.errorCode != 0) {
@@ -165,3 +178,5 @@ class RaTeXFfi {
     }
   }
 }
+
+RaTeXFfi createBackend() => RaTeXFfi();

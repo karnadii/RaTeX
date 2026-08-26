@@ -33,6 +33,13 @@ fn style_str_to_math_style(style: &StyleStr) -> MathStyle {
 
 /// Main entry point: lay out a list of ParseNodes into a LayoutBox.
 pub fn layout(nodes: &[ParseNode], options: &LayoutOptions) -> LayoutBox {
+    if !nodes
+        .iter()
+        .any(|node| matches!(node, ParseNode::Cr { .. }))
+        && options.max_width_em.is_some()
+    {
+        return layout_wrapped_expression(nodes, options);
+    }
     layout_expression(nodes, options, true)
 }
 
@@ -80,6 +87,62 @@ fn apply_bin_cancellation(raw: &[Option<MathClass>]) -> Vec<Option<MathClass>> {
 /// `\frac` (Inner) gains spurious 3mu on each side of every `\middle\vert`.
 fn node_is_middle_fence(node: &ParseNode) -> bool {
     matches!(node, ParseNode::Middle { .. })
+}
+
+/// Lay out a top-level expression in rows, breaking only at safe math atom
+/// boundaries. Nested groups stay atomic so a fraction or parenthesized term
+/// is never split across lines.
+fn layout_wrapped_expression(nodes: &[ParseNode], options: &LayoutOptions) -> LayoutBox {
+    let max_width = options.max_width_em.expect("wrapping requires a width");
+    let classes: Vec<Option<MathClass>> = nodes.iter().map(node_math_class).collect();
+    let break_points: Vec<usize> = classes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, class)| match class {
+            Some(MathClass::Rel | MathClass::Bin | MathClass::Punct) => Some(index),
+            _ => None,
+        })
+        .collect();
+
+    if break_points.is_empty() {
+        return layout_expression(nodes, options, true);
+    }
+
+    let mut rows = Vec::new();
+    let mut row_start = 0;
+    let mut segment_start = 0;
+    for break_point in break_points
+        .iter()
+        .copied()
+        .chain(std::iter::once(nodes.len().saturating_sub(1)))
+    {
+        let segment_end = break_point;
+        if segment_end < segment_start {
+            continue;
+        }
+
+        let candidate = &nodes[row_start..=segment_end];
+        let candidate_width = layout_expression(candidate, options, true).width;
+        if candidate_width > max_width && row_start < segment_start {
+            rows.push(layout_expression(
+                &nodes[row_start..segment_start],
+                options,
+                true,
+            ));
+            row_start = segment_start;
+        }
+        segment_start = segment_end + 1;
+    }
+
+    if row_start < nodes.len() {
+        rows.push(layout_expression(&nodes[row_start..], options, true));
+    }
+
+    if rows.len() == 1 {
+        rows.remove(0)
+    } else {
+        stack_rows(rows, options)
+    }
 }
 
 /// Lay out an expression (list of nodes) as a horizontal sequence with spacing.
@@ -153,12 +216,6 @@ fn layout_multiline(
     options: &LayoutOptions,
     is_real_group: bool,
 ) -> LayoutBox {
-    use crate::layout_box::{BoxContent, VBoxChild, VBoxChildKind};
-    let metrics = options.metrics();
-    let pt = 1.0 / metrics.pt_per_em;
-    let baselineskip = 12.0 * pt; // standard TeX baselineskip
-    let lineskip = 1.0 * pt; // minimum gap between lines
-
     // Split nodes at Cr boundaries
     let mut rows: Vec<&[ParseNode]> = Vec::new();
     let mut start = 0;
@@ -175,15 +232,21 @@ fn layout_multiline(
         .map(|row| layout_expression(row, options, is_real_group))
         .collect();
 
-    let total_width = row_boxes.iter().map(|b| b.width).fold(0.0_f64, f64::max);
+    stack_rows(row_boxes, options)
+}
 
+fn stack_rows(rows: Vec<LayoutBox>, options: &LayoutOptions) -> LayoutBox {
+    let metrics = options.metrics();
+    let pt = 1.0 / metrics.pt_per_em;
+    let baselineskip = 12.0 * pt;
+    let lineskip = 1.0 * pt;
+    let total_width = rows.iter().map(|b| b.width).fold(0.0_f64, f64::max);
     let mut vchildren: Vec<VBoxChild> = Vec::new();
-    let mut h = row_boxes.first().map(|b| b.height).unwrap_or(0.0);
-    let d = row_boxes.last().map(|b| b.depth).unwrap_or(0.0);
-    for (i, row) in row_boxes.iter().enumerate() {
+    let mut h = rows.first().map(|b| b.height).unwrap_or(0.0);
+    let d = rows.last().map(|b| b.depth).unwrap_or(0.0);
+    for (i, row) in rows.iter().enumerate() {
         if i > 0 {
-            // TeX baselineskip: gap = baselineskip - prev_depth - cur_height
-            let prev_depth = row_boxes[i - 1].depth;
+            let prev_depth = rows[i - 1].depth;
             let gap = (baselineskip - prev_depth - row.height).max(lineskip);
             vchildren.push(VBoxChild {
                 kind: VBoxChildKind::Kern(gap),

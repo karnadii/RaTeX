@@ -13,7 +13,7 @@ export 'src/display_list.dart';
 export 'src/ratex_exception.dart';
 
 /// Process-scoped LRU cache for parsed-and-laid-out [DisplayList]s.
-/// Keyed on `(latex, fontSize, displayMode)` — color is intentionally
+/// Keyed on `(latex, fontSize, displayMode, maxWidthEm)` — color is intentionally
 /// excluded because it's applied at paint time, not layout time.
 /// Two formulas with the same source/fontSize/displayMode but different
 /// colors share a cache entry (the paint pass overrides color anyway).
@@ -24,18 +24,21 @@ class RaTeXRenderCache {
   final int _maxSize;
   final _cache = <String, DisplayList>{};
 
-  String _key(String latex, double fontSize, bool displayMode) =>
-      '$latex\x00$fontSize\x00$displayMode';
+  String _key(String latex, double fontSize, bool displayMode,
+          double? maxWidthEm) =>
+      '$latex\x00$fontSize\x00$displayMode\x00$maxWidthEm';
 
-  DisplayList? get(String latex, double fontSize, bool displayMode) {
-    final key = _key(latex, fontSize, displayMode);
+  DisplayList? get(String latex, double fontSize, bool displayMode,
+      [double? maxWidthEm]) {
+    final key = _key(latex, fontSize, displayMode, maxWidthEm);
     final dl = _cache.remove(key);
     if (dl != null) _cache[key] = dl; // move to end (most-recently-used)
     return dl;
   }
 
-  void put(String latex, double fontSize, bool displayMode, DisplayList dl) {
-    final key = _key(latex, fontSize, displayMode);
+  void put(String latex, double fontSize, bool displayMode, DisplayList dl,
+      [double? maxWidthEm]) {
+    final key = _key(latex, fontSize, displayMode, maxWidthEm);
     _cache.remove(key); // remove old entry if present
     _cache[key] = dl;
     if (_cache.length > _maxSize) {
@@ -101,11 +104,13 @@ class RaTeXEngine {
     String latex, {
     bool displayMode = true,
     Color color = const Color(0xFF000000),
+    double? maxWidthEm,
   }) =>
       _backend.parseAndLayout(
         latex,
         displayMode: displayMode,
         color: _toRaTeXColor(color),
+        maxWidthEm: maxWidthEm,
       );
 }
 
@@ -114,11 +119,13 @@ class RaTeXParseAndLayoutIsolateArgs {
   const RaTeXParseAndLayoutIsolateArgs({
     required this.latex,
     required this.displayMode,
+    this.maxWidthEm,
     this.colorArgb,
   });
 
   final String latex;
   final bool displayMode;
+  final double? maxWidthEm;
 
   final int? colorArgb;
 }
@@ -130,6 +137,7 @@ DisplayList ratexParseAndLayoutInIsolate(RaTeXParseAndLayoutIsolateArgs args) {
     args.latex,
     displayMode: args.displayMode,
     color: color,
+    maxWidthEm: args.maxWidthEm,
   );
 }
 
@@ -140,6 +148,9 @@ class RaTeXWidget extends StatefulWidget {
   final double fontSize;
   final bool displayMode;
   final Color? color;
+
+  /// Available width in logical pixels for automatic line wrapping.
+  final double? maxWidth;
   final void Function(RaTeXException)? onError;
 
   /// Optional contrasting color drawn as a glyph-level stroke
@@ -160,6 +171,7 @@ class RaTeXWidget extends StatefulWidget {
     this.fontSize = 24,
     this.displayMode = true,
     this.color,
+    this.maxWidth,
     this.haloColor,
     this.haloWidth = 3.0,
     this.onError,
@@ -204,6 +216,7 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
     if (old.latex != widget.latex ||
         old.fontSize != widget.fontSize ||
         old.displayMode != widget.displayMode ||
+        old.maxWidth != widget.maxWidth ||
         old.color != widget.color) {
       _lastInheritedColor = widget.color == null ? _inheritedColor : null;
       _render();
@@ -220,6 +233,7 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
       widget.latex,
       widget.fontSize,
       widget.displayMode,
+      _maxWidthEm,
     );
     if (cached != null) {
       if (!mounted || generation != _renderGeneration) return;
@@ -236,6 +250,7 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
         RaTeXParseAndLayoutIsolateArgs(
           latex: widget.latex,
           displayMode: widget.displayMode,
+          maxWidthEm: _maxWidthEm,
           colorArgb: resolvedColor.value, // ignore: deprecated_member_use
         ),
       );
@@ -247,6 +262,7 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
         widget.fontSize,
         widget.displayMode,
         dl,
+        _maxWidthEm,
       );
       setState(() {
         _displayList = dl;
@@ -275,6 +291,12 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
     }
   }
 
+  double? get _maxWidthEm {
+    final maxWidth = widget.maxWidth;
+    if (maxWidth == null || !maxWidth.isFinite || maxWidth <= 0) return null;
+    return maxWidth / widget.fontSize;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
@@ -297,6 +319,31 @@ class _RaTeXWidgetState extends State<RaTeXWidget> {
       haloColor: widget.haloColor,
       haloWidth: widget.haloWidth,
     );
+    final maxWidth = widget.maxWidth;
+    final scale = maxWidth != null && maxWidth.isFinite && maxWidth > 0
+        ? (maxWidth / painter.widthPx).clamp(0.0, 1.0)
+        : 1.0;
+    if (scale < 1.0 && scale >= 0.75) {
+      return Semantics(
+        label: widget.latex,
+        child: SizedBox(
+          width: maxWidth,
+          height: painter.totalHeightPx * scale,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Transform.scale(
+              alignment: Alignment.centerLeft,
+              scale: scale,
+              child: SizedBox(
+                width: painter.widthPx,
+                height: painter.totalHeightPx,
+                child: CustomPaint(painter: painter),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return Semantics(
       label: widget.latex,
       child: SizedBox(
