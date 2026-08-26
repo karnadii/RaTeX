@@ -53,7 +53,7 @@ function readPngSize(absPath) {
 const lines = readFileSync(TEST_CASES, 'utf-8')
     .split('\n')
     .map(l => l.trim())
-    .filter(l => l && !l.startsWith('#'));
+    .filter(l => l && !l.startsWith('#') && !l.startsWith('%'));
 
 if (lines.length === 0) {
     console.error('No formulas found in', TEST_CASES);

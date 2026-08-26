@@ -2,6 +2,8 @@
 import type { Locale } from "../../i18n/types";
 import { useTranslations, pageHref } from "../../i18n/utils";
 import BaseLayout from "../../layouts/BaseLayout.astro";
+import goldenBaseline from "../../../../tests/golden/baseline.json";
+import formulaCorpus from "../../../../tests/golden/test_cases.txt?raw";
 
 interface Props {
   lang?: Locale;
@@ -9,8 +11,22 @@ interface Props {
 const { lang = "en" } = Astro.props;
 const t = useTranslations(lang);
 const base = import.meta.env.BASE_URL;
-/** Mean of GOLDEN_SCORES in public/demo-support-table.js (recompute after regenerating that file). */
-const offlineScoreMean = "0.90";
+const formulas = formulaCorpus
+  .split(/\r?\n/)
+  .map((line) => line.trim())
+  .filter((line) => line && !line.startsWith("#") && !line.startsWith("%"));
+if (formulas.length !== goldenBaseline.scores.length) {
+  throw new Error("Golden baseline score count does not match the formula corpus");
+}
+const scored = goldenBaseline.scores.filter((score): score is number => score !== null);
+const renderedMean = (
+  scored.reduce((sum, score) => sum + score, 0) / scored.length
+).toFixed(3);
+const supportCases = formulas.map((formula, index) => ({
+  index: index + 1,
+  formula,
+  score: goldenBaseline.scores[index],
+}));
 
 const filterActive =
   "filter-btn rounded-full border border-primary bg-primary px-3 py-1.5 text-xs font-medium text-on-primary shadow-sm transition-colors";
@@ -20,7 +36,7 @@ const filterIdle =
 
 <BaseLayout
   title="RaTeX — Formula support table"
-  description={`Main golden suite vs KaTeX 0.16.45: ink IoU vs reference PNGs (batch mean ≈ ${offlineScoreMean} on scored rows; line count tracks \`tests/golden/test_cases.txt\`). Live RaTeX column in your browser.`}
+  description={`Main golden suite vs KaTeX 0.16.45: ${goldenBaseline.metric} rendered mean ${renderedMean}. Formula rows and scores come from the compact versioned baseline.`}
   active="demo"
   lang={lang}
   copyright={t.footer.copyright}
@@ -185,6 +201,21 @@ const filterIdle =
             {" "}<a href={pageHref("demo/live.html", lang, base)} class="text-primary font-medium underline underline-offset-2">{t.supportTable.dataSourceLiveLink}</a>.
           </p>
         </div>
+
+        <dl class="mb-8 grid max-w-3xl grid-cols-1 gap-px overflow-hidden rounded-[12px] border border-outline/40 bg-outline/30 text-sm sm:grid-cols-3">
+          <div class="bg-white p-4">
+            <dt class="text-[10px] font-label uppercase tracking-wider text-on-surface-variant">Suite hash</dt>
+            <dd class="mt-1 font-mono text-xs text-zinc-900" title={goldenBaseline.hash}>{goldenBaseline.hash.slice(0, 12)}</dd>
+          </div>
+          <div class="bg-white p-4">
+            <dt class="text-[10px] font-label uppercase tracking-wider text-on-surface-variant">Metric</dt>
+            <dd class="mt-1 font-mono text-xs text-zinc-900">{goldenBaseline.metric}</dd>
+          </div>
+          <div class="bg-white p-4">
+            <dt class="text-[10px] font-label uppercase tracking-wider text-on-surface-variant">Rendered mean</dt>
+            <dd class="mt-1 font-mono text-xs text-zinc-900">{renderedMean}</dd>
+          </div>
+        </dl>
 
         <div
           class="mt-10 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-6 gap-4"
@@ -374,5 +405,8 @@ const filterIdle =
     </div>
   </main>
 
+  <script is:inline define:vars={{ supportCases }}>
+    globalThis.__RATEX_GOLDEN_REPORT__ = { cases: supportCases };
+  </script>
   <script src={`${base}demo-support-table.js`}></script>
 </BaseLayout>

@@ -96,6 +96,21 @@ public class RaTeXView: PlatformView {
         return CGSize(width: r.width, height: r.totalHeight)
     }
 
+    /// Distance from the view's top to the drawn formula's alphabetic baseline, or
+    /// nil before anything has rendered. Mirrors `draw(_:)`'s fit-scale/centering
+    /// math so the reported baseline always matches the ink actually painted.
+    public var baselineFromTop: CGFloat? {
+        guard let r = renderer else { return nil }
+        let contentW = r.width
+        let contentH = r.totalHeight
+        guard contentW > 0, contentH > 0 else { return nil }
+        let sx = bounds.width / contentW
+        let sy = bounds.height / contentH
+        let scale = min(1, min(sx, sy))
+        let dy = max(0, (bounds.height - contentH * scale) / 2)
+        return dy + r.height * scale
+    }
+
     // MARK: Drawing
 
     public override func draw(_ rect: CGRect) {

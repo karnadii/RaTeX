@@ -21,7 +21,7 @@ CustomPaint Widget
 
 ## Out of the box
 
-1. **Add dependency** — add `ratex_flutter: ^0.1.12` to `pubspec.yaml`, then run `flutter pub get`. No native build required — the published package includes prebuilt Android `.so`, iOS XCFramework, macOS `.dylib`, Windows `.dll`, and Linux `.so`.
+1. **Add dependency** — add `ratex_flutter: ^0.1.14` to `pubspec.yaml`, then run `flutter pub get`. No native build required — the published package includes prebuilt Android `.so`, iOS XCFramework, macOS `.dylib`, Windows `.dll`, and Linux `.so`.
 2. **Register fonts** — Flutter does not auto-register plugin fonts for the host app. Copy the [KaTeX font declarations](#font-setup) into your `pubspec.yaml` (see Installation below).
 3. **Use** — Use `RaTeXWidget`:
    ```dart
@@ -42,10 +42,20 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  ratex_flutter: ^0.1.12
+  ratex_flutter: ^0.1.14
 ```
 
 Then run `flutter pub get`. No native build required — the published package includes prebuilt Android `.so`, iOS `RaTeX.xcframework`, macOS `.dylib`, Windows `.dll`, and Linux `.so`.
+
+#### iOS dependency manager
+
+The plugin supports both Swift Package Manager and CocoaPods. Flutter 3.44 and later use SwiftPM by default. On Flutter 3.24 through 3.43, or if SwiftPM was previously disabled, enable it before running `flutter pub get` or building the app:
+
+```bash
+flutter config --enable-swift-package-manager
+```
+
+Flutter versions earlier than 3.24 should continue using CocoaPods because they do not support SwiftPM project migration. When SwiftPM is disabled, Flutter uses the CocoaPods integration instead. Both dependency managers use the same packaged `RaTeX.xcframework`.
 
 #### Font setup
 
@@ -365,7 +375,7 @@ the bounding box. The baseline is at Y = `height × fontSize`.
 | File | Purpose |
 |------|---------|
 | `pubspec.yaml` | Flutter plugin manifest |
-| `ios/` | iOS plugin (podspec + RaTeXPlugin.swift); links RaTeX.xcframework |
+| `ios/` | iOS plugin (CocoaPods podspec + SwiftPM package); links RaTeX.xcframework |
 | `android/` | Android plugin (RaTeXPlugin.kt); uses in-package `jniLibs` for `libratex_ffi.so` |
 | `macos/` | macOS plugin (podspec + RaTeXPlugin.swift); links universal `.dylib` |
 | `windows/` | Windows plugin (CMake + C++ stub); includes `ratex_ffi.dll` |
@@ -400,10 +410,11 @@ To publish an **out-of-the-box** package that works without building native code
    ```bash
    # From repo root
    ./platforms/ios/build-ios.sh
-   # If platforms/flutter/ios/RaTeX.xcframework is a symlink, replace with real copy:
-   rm -rf platforms/flutter/ios/RaTeX.xcframework
-   cp -R platforms/ios/RaTeX.xcframework platforms/flutter/ios/
+   # If the packaged XCFramework is a symlink, replace it with a real copy:
+   rm -rf platforms/flutter/ios/ratex_flutter/RaTeX.xcframework
+   cp -R platforms/ios/RaTeX.xcframework platforms/flutter/ios/ratex_flutter/
    ```
+   The same packaged XCFramework is used by both CocoaPods and SwiftPM.
 
 3. **Desktop** — Build and inject platform-specific native libs:
    ```bash

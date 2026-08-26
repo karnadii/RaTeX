@@ -232,7 +232,10 @@ fn run_golden_svg_suite(
     let lines: Vec<String> = std::fs::read_to_string(tc_path)
         .unwrap()
         .lines()
-        .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+        .filter(|line| {
+            let line = line.trim();
+            !line.is_empty() && !line.starts_with('#') && !line.starts_with('%')
+        })
         .map(|l| l.to_string())
         .collect();
 

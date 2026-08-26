@@ -1,7 +1,7 @@
-/// Golden tests: compare RaTeX rendered PNGs against KaTeX reference PNGs.
+/// Fast smoke comparison against KaTeX reference PNGs.
 ///
-/// Uses ink-based comparison: crop to content, normalize size, compute IoU.
-/// This ensures blank/broken renders are correctly identified as failures.
+/// This deliberately lightweight Rust metric is not an official score source.
+/// `tools/golden_compare/compare_golden.py` owns published scores and CI gates.
 use std::path::PathBuf;
 
 use ratex_layout::{layout, to_display_list, LayoutOptions};
@@ -225,7 +225,10 @@ fn run_golden_suite(
     let lines: Vec<String> = std::fs::read_to_string(tc_path)
         .unwrap()
         .lines()
-        .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+        .filter(|line| {
+            let line = line.trim();
+            !line.is_empty() && !line.starts_with('#') && !line.starts_with('%')
+        })
         .map(|l| l.to_string())
         .collect();
 
@@ -326,10 +329,10 @@ fn run_golden_suite(
 }
 
 #[test]
-fn golden_test_pass_rate() {
+fn golden_main_smoke() {
     let root = project_root();
     run_golden_suite(
-        "Golden (main)",
+        "Golden smoke (main)",
         &root.join("tests/golden/test_cases.txt"),
         &root.join("tests/golden/fixtures"),
         75.0,
@@ -358,7 +361,7 @@ fn count_ink_coverage(png_bytes: &[u8]) -> (f64, u32, u32) {
 /// Skips gracefully when no system Unicode font is found.
 #[test]
 fn cjk_smoke_non_blank_rendering() {
-    if ratex_unicode_font::load_unicode_font_arc().is_none() {
+    if ratex_unicode_font::load_unicode_font_data().is_none() {
         eprintln!("SKIP cjk_smoke: no system Unicode font found");
         return;
     }
@@ -431,11 +434,11 @@ fn cjk_smoke_non_blank_rendering() {
 
 /// mhchem (`\\ce` / `\\pu`): uses [tests/golden/test_case_ce.txt](../../tests/golden/test_case_ce.txt) and `fixtures_ce/`.
 #[test]
-fn golden_mhchem_pass_rate() {
+fn golden_mhchem_smoke() {
     let root = project_root();
     // 2.0 matches legacy fixtures_ce (Puppeteer DPR 2); use 1.0 if refs were regenerated with DPR 1.
     run_golden_suite(
-        "Golden (mhchem)",
+        "Golden smoke (mhchem)",
         &root.join("tests/golden/test_case_ce.txt"),
         &root.join("tests/golden/fixtures_ce"),
         50.0,

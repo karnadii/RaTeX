@@ -6,6 +6,7 @@ use ratex_lexer::Lexer;
 use crate::error::{ParseError, ParseResult};
 use crate::functions::FUNCTIONS;
 use crate::parse_node::Mode;
+use crate::stack_safety::{DepthBudget, MAX_INPUT_DEPTH};
 
 /// Commands that act like macros but aren't defined as a macro, function, or symbol.
 /// Used in `is_defined`.
@@ -59,6 +60,8 @@ pub struct MacroExpander<'a> {
     macros: MacroNamespace,
     expansion_count: usize,
     max_expand: usize,
+    depth_budget: DepthBudget,
+    expand_tokens_depth: usize,
 }
 
 /// Scoped macro namespace supporting group nesting.
@@ -159,8 +162,80 @@ fn dotsc_space_after(next: &str) -> bool {
     )
 }
 
+fn dotso_space_after(next: &str) -> bool {
+    next == "," || dotsc_space_after(next)
+}
+
+fn contextual_dots_for(next: &str) -> &'static str {
+    if next == "," {
+        "\\dotsc"
+    } else if matches!(
+        next,
+        "\\not"
+            | "+"
+            | "="
+            | "<"
+            | ">"
+            | "-"
+            | "*"
+            | ":"
+            | "\\DOTSB"
+            | "\\coprod"
+            | "\\bigvee"
+            | "\\bigwedge"
+            | "\\biguplus"
+            | "\\bigcap"
+            | "\\bigcup"
+            | "\\prod"
+            | "\\sum"
+            | "\\bigotimes"
+            | "\\bigoplus"
+            | "\\bigodot"
+            | "\\bigsqcup"
+            | "\\And"
+            | "\\longrightarrow"
+            | "\\Longrightarrow"
+            | "\\longleftarrow"
+            | "\\Longleftarrow"
+            | "\\longleftrightarrow"
+            | "\\Longleftrightarrow"
+            | "\\mapsto"
+            | "\\longmapsto"
+            | "\\hookrightarrow"
+            | "\\doteq"
+            | "\\mathbin"
+            | "\\mathrel"
+            | "\\relbar"
+            | "\\Relbar"
+            | "\\xrightarrow"
+            | "\\xleftarrow"
+    ) || next.starts_with("\\not")
+        || ratex_font::get_symbol(next, ratex_font::Mode::Math).is_some_and(|symbol| {
+            matches!(
+                symbol.group,
+                ratex_font::symbols::Group::Bin | ratex_font::symbols::Group::Rel
+            )
+        })
+    {
+        "\\dotsb"
+    } else if matches!(
+        next,
+        "\\DOTSI" | "\\int" | "\\oint" | "\\iint" | "\\iiint" | "\\iiiint" | "\\idotsint"
+    ) {
+        "\\dotsi"
+    } else if next == "\\DOTSX" {
+        "\\dotsx"
+    } else {
+        "\\dotso"
+    }
+}
+
 impl<'a> MacroExpander<'a> {
     pub fn new(input: &'a str, mode: Mode) -> Self {
+        Self::new_with_budget(input, mode, DepthBudget::new(MAX_INPUT_DEPTH))
+    }
+
+    pub(crate) fn new_with_budget(input: &'a str, mode: Mode, depth_budget: DepthBudget) -> Self {
         let mut me = Self {
             lexer: Lexer::new(input),
             mode,
@@ -168,6 +243,8 @@ impl<'a> MacroExpander<'a> {
             macros: MacroNamespace::new(),
             expansion_count: 0,
             max_expand: 1000,
+            depth_budget,
+            expand_tokens_depth: 0,
         };
         me.load_builtins();
         me
@@ -279,14 +356,12 @@ impl<'a> MacroExpander<'a> {
             // ── colon ──
             ("\\colon", "\\nobreak\\mskip2mu\\mathpunct{}\\mathchoice{\\mkern-3mu}{\\mkern-3mu}{}{}{:}\\mskip6mu\\relax"),
 
-            // ── dots (string-based) ──
-            ("\\dots", "\\cdots"),
+            // ── dots ──
             ("\\cdots", "\\@cdots"),
             ("\\dotsb", "\\cdots"),
             ("\\dotsm", "\\cdots"),
             ("\\dotsi", "\\!\\cdots"),
             ("\\dotsx", "\\ldots\\,"),
-            ("\\dotso", "\\ldots"),  // other
             ("\\DOTSI", "\\relax"),
             ("\\DOTSB", "\\relax"),
             ("\\DOTSX", "\\relax"),
@@ -359,10 +434,6 @@ impl<'a> MacroExpander<'a> {
             ("\u{2984}", "\\rBrace"),
             // Plimsoll.
             ("\u{29B5}", "\\minuso"),
-
-            // ── dddot / ddddot ──
-            ("\\dddot", "{\\overset{\\raisebox{-0.1ex}{\\normalsize ...}}{#1}}"),
-            ("\\ddddot", "{\\overset{\\raisebox{-0.1ex}{\\normalsize ....}}{#1}}"),
 
             // ── vdots ──
             ("\\vdots", "{\\varvdots\\rule{0pt}{15pt}}"),
@@ -626,8 +697,36 @@ impl<'a> MacroExpander<'a> {
             }),
         );
 
-        // KaTeX/amsmath: \dotsc adds a thin space before selected right
-        // delimiters/punctuation, but not before a following comma.
+        // AMSMath's contextual \dots selection. It expands the following token
+        // once before classifying it, matching KaTeX's expandAfterFuture().
+        self.macros.set(
+            "\\dots".to_string(),
+            MacroDefinition::Function(|me: &mut MacroExpander| -> ParseResult<Vec<Token>> {
+                let _guard = me
+                    .depth_budget
+                    .enter()
+                    .map_err(|_| ParseError::recursion_limit_exceeded())?;
+                me.expand_once(false)?;
+                let next = me.future().text.clone();
+                Ok(lex_string_to_stack_tokens(contextual_dots_for(&next)))
+            }),
+        );
+
+        // \dotso and \cdots add a thin space before punctuation/right
+        // delimiters. \dotsc intentionally excludes a following comma.
+        self.macros.set(
+            "\\dotso".to_string(),
+            MacroDefinition::Function(|me: &mut MacroExpander| -> ParseResult<Vec<Token>> {
+                let next = me.future().text.clone();
+                let text = if dotso_space_after(&next) {
+                    "\\ldots\\,"
+                } else {
+                    "\\ldots"
+                };
+                Ok(lex_string_to_stack_tokens(text))
+            }),
+        );
+
         self.macros.set(
             "\\dotsc".to_string(),
             MacroDefinition::Function(|me: &mut MacroExpander| -> ParseResult<Vec<Token>> {
@@ -636,6 +735,19 @@ impl<'a> MacroExpander<'a> {
                     "\\ldots\\,"
                 } else {
                     "\\ldots"
+                };
+                Ok(lex_string_to_stack_tokens(text))
+            }),
+        );
+
+        self.macros.set(
+            "\\cdots".to_string(),
+            MacroDefinition::Function(|me: &mut MacroExpander| -> ParseResult<Vec<Token>> {
+                let next = me.future().text.clone();
+                let text = if dotso_space_after(&next) {
+                    "\\@cdots\\,"
+                } else {
+                    "\\@cdots"
                 };
                 Ok(lex_string_to_stack_tokens(text))
             }),
@@ -824,8 +936,9 @@ impl<'a> MacroExpander<'a> {
                 to_expand.extend(left);
 
                 me.begin_group();
-                let expanded = me.expand_tokens(to_expand)?;
+                let expanded = me.expand_tokens(to_expand);
                 me.end_group();
+                let expanded = expanded?;
 
                 Ok(expanded)
             }),
@@ -885,8 +998,9 @@ impl<'a> MacroExpander<'a> {
                 to_expand.extend(left);
 
                 me.begin_group();
-                let expanded = me.expand_tokens(to_expand)?;
+                let expanded = me.expand_tokens(to_expand);
                 me.end_group();
+                let expanded = expanded?;
 
                 Ok(expanded)
             }),
@@ -898,8 +1012,9 @@ impl<'a> MacroExpander<'a> {
             MacroDefinition::Function(|me: &mut MacroExpander| -> ParseResult<Vec<Token>> {
                 let args = me.consume_args(1)?;
                 let s = crate::mhchem::mhchem_arg_tokens_to_string(&args[0]);
-                let tex = crate::mhchem::chem_parse_str(&s, "ce")
-                    .map_err(|e| ParseError::msg(format!("\\ce: {e}")))?;
+                let tex =
+                    crate::mhchem::chem_parse_str_with_budget(&s, "ce", me.depth_budget.clone())
+                        .map_err(|e| ParseError::msg(format!("\\ce: {e}")))?;
                 Ok(lex_string_to_stack_tokens(&tex))
             }),
         );
@@ -908,8 +1023,9 @@ impl<'a> MacroExpander<'a> {
             MacroDefinition::Function(|me: &mut MacroExpander| -> ParseResult<Vec<Token>> {
                 let args = me.consume_args(1)?;
                 let s = crate::mhchem::mhchem_arg_tokens_to_string(&args[0]);
-                let tex = crate::mhchem::chem_parse_str(&s, "pu")
-                    .map_err(|e| ParseError::msg(format!("\\pu: {e}")))?;
+                let tex =
+                    crate::mhchem::chem_parse_str_with_budget(&s, "pu", me.depth_budget.clone())
+                        .map_err(|e| ParseError::msg(format!("\\pu: {e}")))?;
                 Ok(lex_string_to_stack_tokens(&tex))
             }),
         );
@@ -934,28 +1050,44 @@ impl<'a> MacroExpander<'a> {
 
     /// Expand a list of tokens fully (for \edef/\xdef).
     pub fn expand_tokens(&mut self, tokens: Vec<Token>) -> ParseResult<Vec<Token>> {
+        let nested = self.expand_tokens_depth > 0;
+        let _guard = if nested {
+            Some(
+                self.depth_budget
+                    .enter()
+                    .map_err(|_| ParseError::recursion_limit_exceeded())?,
+            )
+        } else {
+            None
+        };
+
+        self.expand_tokens_depth += 1;
         let saved_stack = std::mem::take(&mut self.stack);
         self.stack = tokens;
 
-        let mut result = Vec::new();
-        loop {
-            if self.stack.is_empty() {
-                break;
-            }
-            let expanded = self.expand_once(false)?;
-            if !expanded {
-                if let Some(tok) = self.stack.pop() {
-                    if tok.is_eof() {
-                        break;
+        let result = (|| {
+            let mut result = Vec::new();
+            loop {
+                if self.stack.is_empty() {
+                    break;
+                }
+                let expanded = self.expand_once(false)?;
+                if !expanded {
+                    if let Some(tok) = self.stack.pop() {
+                        if tok.is_eof() {
+                            break;
+                        }
+                        result.push(tok);
                     }
-                    result.push(tok);
                 }
             }
-        }
+            result.reverse();
+            Ok(result)
+        })();
 
         self.stack = saved_stack;
-        result.reverse();
-        Ok(result)
+        self.expand_tokens_depth -= 1;
+        result
     }
 
     pub fn switch_mode(&mut self, new_mode: Mode) {

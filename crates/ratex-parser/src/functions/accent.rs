@@ -16,6 +16,8 @@ static NON_STRETCHY: &[&str] = &[
     "\\vec",
     "\\dot",
     "\\mathring",
+    "\\dddot",
+    "\\ddddot",
 ];
 
 pub fn register(map: &mut HashMap<&'static str, FunctionSpec>) {
@@ -34,6 +36,8 @@ pub fn register(map: &mut HashMap<&'static str, FunctionSpec>) {
             "\\vec",
             "\\dot",
             "\\mathring",
+            "\\dddot",
+            "\\ddddot",
             "\\widecheck",
             "\\widehat",
             "\\widetilde",

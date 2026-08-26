@@ -36,7 +36,9 @@ function readLinesNonEmpty(file) {
   return raw
     .split(/\r?\n/)
     .map((l) => l.trim())
-    .filter((l) => l.length > 0 && !l.startsWith("#"));
+    .filter(
+      (l) => l.length > 0 && !l.startsWith("#") && !l.startsWith("%"),
+    );
 }
 
 function uniquePush(arr, item) {

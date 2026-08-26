@@ -1,6 +1,5 @@
-// RaTeXInlineViewManager.mm — Apple bridge for RaTeXInlineView (old arch & Fabric).
+// RaTeXInlineViewManager.mm — Apple bridge for RaTeXInlineView (Fabric / New Architecture).
 
-#ifdef RCT_NEW_ARCH_ENABLED
 #import <React/RCTComponentViewProtocol.h>
 #import <React/RCTFabricComponentsPlugins.h>
 #import <React/RCTViewComponentView.h>
@@ -8,10 +7,6 @@
 #import <react/renderer/components/RNRaTeXSpec/EventEmitters.h>
 #import <react/renderer/components/RNRaTeXSpec/Props.h>
 #import <react/renderer/components/RNRaTeXSpec/RCTComponentViewHelpers.h>
-#else
-#import "RaTeXInlineViewManager.h"
-#import <React/RCTUIManager.h>
-#endif
 
 #if TARGET_OS_OSX
 #import <AppKit/AppKit.h>
@@ -19,17 +14,19 @@
 #import <UIKit/UIKit.h>
 #endif
 
-// Framework/module import form (not the quote form): forces the Swift module to
-// build before this Objective-C++ TU, avoiding a non-deterministic compile race
-// where -Swift.h is "file not found" on a clean xcodebuild / EAS / CI build.
+// Prefer the framework/module form (forces the Swift module to build before this
+// Objective-C++ TU, avoiding a non-deterministic "-Swift.h file not found" compile
+// race on clean xcodebuild/EAS/CI builds). Fall back to the quote form when the
+// module form does not resolve — i.e. when the library builds as a *static library*
+// rather than a framework/clang module (`use_frameworks! :linkage => :static` /
+// Expo `useFrameworks: 'static'`), where the generated header lands only in this
+// target's own DerivedSources. Guard with __has_include so both linkages work.
+#if __has_include(<ratex_react_native/ratex_react_native-Swift.h>)
 #import <ratex_react_native/ratex_react_native-Swift.h>
+#else
+#import "ratex_react_native-Swift.h"
+#endif
 #import "RaTeXColorUtils.h"
-
-// ---------------------------------------------------------------------------
-// MARK: - New Architecture (Fabric)
-// ---------------------------------------------------------------------------
-
-#ifdef RCT_NEW_ARCH_ENABLED
 
 using namespace facebook::react;
 
@@ -157,42 +154,3 @@ Class<RCTComponentViewProtocol> RaTeXInlineViewCls(void)
 {
   return RaTeXInlineViewComponentView.class;
 }
-
-// ---------------------------------------------------------------------------
-// MARK: - Old Architecture (Bridge)
-// ---------------------------------------------------------------------------
-
-#else // !RCT_NEW_ARCH_ENABLED
-
-@implementation RaTeXInlineViewManager
-
-RCT_EXPORT_MODULE(RaTeXInlineView)
-
-#if TARGET_OS_OSX
-- (NSView *)view
-#else
-- (UIView *)view
-#endif
-{
-  return [[RaTeXInlineRNView alloc] init];
-}
-
-RCT_EXPORT_VIEW_PROPERTY(content, NSString)
-RCT_EXPORT_VIEW_PROPERTY(fontSize, CGFloat)
-#if TARGET_OS_OSX
-RCT_EXPORT_VIEW_PROPERTY(color, NSColor)
-RCT_EXPORT_VIEW_PROPERTY(textColor, NSColor)
-#else
-RCT_EXPORT_VIEW_PROPERTY(color, UIColor)
-RCT_EXPORT_VIEW_PROPERTY(textColor, UIColor)
-#endif
-RCT_EXPORT_VIEW_PROPERTY(textFontSize, CGFloat)
-RCT_EXPORT_VIEW_PROPERTY(textFontFamily, NSString)
-RCT_EXPORT_VIEW_PROPERTY(textItalic, BOOL)
-RCT_EXPORT_VIEW_PROPERTY(textUnderline, BOOL)
-RCT_EXPORT_VIEW_PROPERTY(textLineThrough, BOOL)
-RCT_EXPORT_VIEW_PROPERTY(onContentSizeChange, RCTDirectEventBlock)
-
-@end
-
-#endif // RCT_NEW_ARCH_ENABLED

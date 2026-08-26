@@ -1047,3 +1047,29 @@ a · b
 ⨄_{m} P_m
 ⨆_{n} Q_n
 \textcolor{#ff000050}{x}
+○\div□=5\quad□\div○=5
+{\text{\textit{Inflation}}} = 100 * \left({\text{\textit{CPI}}_{t} - \text{\textit{CPI}}_{t-1} \over \text{\textit{CPI}}_{t-1}}\right)
+\dots,\quad \dots+\quad \dots\int\quad \dots)
+\cdots,\quad \dotsc,\quad \dotso;
+\dddot{x}\quad\ddddot{x}
+\prod_{k=1}^{n} k
+\coprod_i S_i
+\sum_{m=1}^{M} m
+\bigwedge_{i=1}^n \varphi_i
+\bigvee_{j} \psi_j
+\bigcap_{n} U_n
+\bigcup_{\alpha} V_{\alpha}
+\bigodot_{i=1}^r G_i
+\bigoplus_{j} H_j
+\bigotimes_{k} L_k
+\biguplus_{m} P_m
+\bigsqcup_{n} Q_n
+\displaystyle\sum_{n=1}^{\infty}
+\textstyle\sum_{n=1}^{\infty}
+\scriptstyle\sum_{n=1}^{\infty}
+\scriptscriptstyle\sum_{n=1}^{\infty}
+\displaystyle\sum\nolimits_{n=1}^{\infty} x_n
+\displaystyle\lim_{x\to0} f(x)
+\textstyle\lim\limits_{x\to0} f(x)
+\scriptstyle\dddot{x}\quad\scriptscriptstyle\ddddot{x}
+x_{\dddot{y}}\quad x_{\ddddot{y}}

@@ -30,6 +30,8 @@ jobs:
         run: cargo clippy --workspace -- -D warnings
       - name: Test
         run: cargo test --workspace
+      - name: Test release stack-safety boundary
+        run: cargo test --release -p ratex-layout --test stack_safety
       - name: Test ratex-font-loader (all features)
         run: cargo test -p ratex-font-loader --all-features
       - name: Test ratex-pdf (all features, embed-fonts + CLI)
@@ -62,11 +64,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - name: Build ratex-wasm npm package (platforms/web)
+      - name: Build and test ratex-wasm npm package (platforms/web)
         run: |
           cd platforms/web
           npm ci
-          npm run build
+          npm test
 
   gtk-gobject-smoke:
     runs-on: ubuntu-latest
@@ -146,6 +148,23 @@ jobs:
         run: LIBRARY_PATH=$(pwd)/target/release swift test --package-path platforms/ios/tests
       - name: Smoke executable (macOS)
         run: LIBRARY_PATH=$(pwd)/target/release swift run --package-path platforms/ios/tests ratex-smoke
+
+  flutter-ios-linkage:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Build iOS XCFramework
+        run: bash platforms/ios/build-ios.sh
+      - name: Verify Flutter CocoaPods and SwiftPM release linkage
+        run: bash platforms/flutter/tool/verify-ios-integration.sh
 
   # Compiles the real SPM package's Swift wrapper (platforms/ios/Sources/Ratex/*.swift)
   # for macOS/AppKit through the published Package.swift + RaTeX.xcframework binary

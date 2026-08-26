@@ -29,7 +29,24 @@ Reference PNGs live under `tests/golden/fixtures/`. Regenerate RaTeX outputs wit
 ./scripts/update_golden_output.sh
 ```
 
-Comparison helpers: `tools/golden_compare/`, and `crates/ratex-render/tests/golden_test.rs`. Some cases score lower than others due to font subpixel rendering, anti-aliasing, or layout edge differences versus KaTeX reference PNGs — that does not always indicate a visible bug.
+The Python comparator is the only authoritative score source and CI gate. The
+Rust test in `crates/ratex-render/tests/golden_test.rs` is a fast smoke test; it
+must not be used to publish a second “official” mean. See
+[`docs/GOLDEN_BASELINE.md`](docs/GOLDEN_BASELINE.md) for report fields,
+integrity rules, exclusions, and baseline updates.
+
+Generate the compact versioned baseline with:
+
+```bash
+cd tools/golden_compare && npm ci
+cd ../..
+python3 -m pip install -r tools/golden_compare/requirements.txt
+./scripts/update_golden_baseline.sh
+```
+
+Only `tests/golden/baseline.json` is committed. Generated RaTeX PNG/SVG output,
+manifests, CSV, and the full diagnostic report remain local or are uploaded as
+CI artifacts.
 
 **KaTeX syntax not supported or not equivalent (command-level):** see [README.md](README.md) and [README.zh-CN.md](README.zh-CN.md) (sections *KaTeX differences (commands & DOM)* / *与 KaTeX 的差异（命令 / DOM）*).
 
@@ -43,8 +60,15 @@ node generate_reference.mjs ../../tests/golden/test_case_ce.txt ../../tests/gold
 Ink score for that suite:
 
 ```bash
-cargo test -p ratex-render golden_mhchem_pass_rate -- --nocapture
+cargo test -p ratex-render golden_mhchem_smoke -- --nocapture
 ```
+
+## Stack safety
+
+Parser-driven rendering uses a shared depth budget for input-controlled
+recursive structures. Before adding or changing recursive syntax, read
+[`docs/STACK_SAFETY.md`](docs/STACK_SAFETY.md) and add the boundary and
+small-stack regressions described there.
 
 RaTeX renders for inspection: `./scripts/update_golden_output.sh` (writes `tests/golden/output_ce/`). Compare with KaTeX refs using `python3 tools/golden_compare/compare_golden.py --ce` (same ink metric as the main golden script).
 

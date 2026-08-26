@@ -273,6 +273,77 @@ fn binary_op_a_plus_b() {
 }
 
 #[test]
+fn unicode_white_circle_matches_square_metric_box() {
+    let circle = layout_with_style("○", MathStyle::Display);
+    let square = layout_with_style("□", MathStyle::Display);
+    let bigcirc = layout_with_style("\\bigcirc", MathStyle::Display);
+    let circle_expr = layout_with_style("○\\div□=5", MathStyle::Display);
+    let square_expr = layout_with_style("□\\div□=5", MathStyle::Display);
+    let bold_circle = layout_with_style("\\mathbf{○}", MathStyle::Display);
+
+    assert!((circle.width - square.width).abs() < TOLERANCE);
+    assert!((circle.height - square.height).abs() < TOLERANCE);
+    assert!((circle.depth - square.depth).abs() < TOLERANCE);
+    assert!(bigcirc.width > circle.width);
+    assert!((circle_expr.width - square_expr.width).abs() < TOLERANCE);
+    assert!((bold_circle.width - square.width).abs() < TOLERANCE);
+    assert!((bold_circle.height - square.height).abs() < TOLERANCE);
+    assert!((bold_circle.depth - square.depth).abs() < TOLERANCE);
+
+    let circle_display = to_display_list(&circle);
+    let square_display = to_display_list(&square);
+    let glyph_bounds = |display: &DisplayList| {
+        display
+            .items
+            .iter()
+            .find_map(|item| match item {
+                DisplayItem::GlyphPath {
+                    x,
+                    y,
+                    scale,
+                    font,
+                    char_code,
+                    ..
+                } => {
+                    let font_id = ratex_font::FontId::parse(font).unwrap();
+                    let metrics = ratex_font::get_char_metrics(font_id, *char_code).unwrap();
+                    Some((
+                        *x,
+                        x + metrics.width * scale,
+                        y - metrics.height * scale,
+                        y + metrics.depth * scale,
+                        *scale,
+                        font_id,
+                        *char_code,
+                    ))
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    let circle_glyph = glyph_bounds(&circle_display);
+    let square_glyph = glyph_bounds(&square_display);
+
+    assert_eq!(circle_glyph.5, ratex_font::FontId::MainRegular);
+    assert_eq!(circle_glyph.6, '◯' as u32);
+    assert!(circle_glyph.4 < 1.0);
+    assert!((circle_glyph.0 + circle_glyph.1 - square_glyph.0 - square_glyph.1).abs() < TOLERANCE);
+    assert!((circle_glyph.2 - square_glyph.2).abs() < TOLERANCE);
+    assert!((circle_glyph.3 - square_glyph.3).abs() < TOLERANCE);
+
+    let bold_display = to_display_list(&bold_circle);
+    assert!(bold_display.items.iter().any(|item| matches!(
+        item,
+        DisplayItem::GlyphPath {
+            font,
+            char_code,
+            scale,
+            ..
+        } if font == "Main-Bold" && *char_code == '◯' as u32 && *scale < 1.0
+    )));
+}
+
+#[test]
 fn relational_eq() {
     check("a+b=c", 0.69444, 0.08333);
 }
@@ -455,6 +526,34 @@ fn accent_hat_x() {
 }
 
 #[test]
+fn accent_keeps_skew_for_multi_glyph_font_run() {
+    use ratex_layout::layout_box::{BoxContent, LayoutBox};
+
+    fn find_accent_skew(lbox: &LayoutBox) -> Option<f64> {
+        match &lbox.content {
+            BoxContent::Accent { skew, .. } => Some(*skew),
+            BoxContent::HBox(children) => children.iter().find_map(find_accent_skew),
+            BoxContent::Scaled { body, .. } | BoxContent::RaiseBox { body, .. } => {
+                find_accent_skew(body)
+            }
+            _ => None,
+        }
+    }
+
+    let options = LayoutOptions::default();
+    let single = layout(&parse(r"\hat{\mathit{M}}").unwrap(), &options);
+    let run = layout(&parse(r"\hat{\mathit{MM}}").unwrap(), &options);
+    let single_skew = find_accent_skew(&single).expect("single-glyph accent");
+    let run_skew = find_accent_skew(&run).expect("multi-glyph accent");
+
+    assert!(single_skew > 0.0, "test glyph must have a non-zero skew");
+    assert!(
+        (run_skew - single_skew).abs() < f64::EPSILON,
+        "font run lost the final glyph skew: single={single_skew}, run={run_skew}"
+    );
+}
+
+#[test]
 fn accent_bar_a() {
     check("\\bar{a}", 0.78056, 0.0);
 }
@@ -582,8 +681,75 @@ fn text_hello() {
 }
 
 #[test]
+fn continuous_text_and_textrm_use_glyph_runs() {
+    use ratex_layout::layout_box::{BoxContent, LayoutBox};
+
+    fn longest_run(lbox: &LayoutBox) -> usize {
+        match &lbox.content {
+            BoxContent::GlyphRun { glyphs } => glyphs.len(),
+            BoxContent::HBox(children) => children.iter().map(longest_run).max().unwrap_or(0),
+            BoxContent::Scaled { body, .. } | BoxContent::RaiseBox { body, .. } => {
+                longest_run(body)
+            }
+            _ => 0,
+        }
+    }
+
+    for input in [r"\text{hello}", r"\textrm{hello}"] {
+        let lbox = layout(&parse(input).unwrap(), &LayoutOptions::default());
+        assert_eq!(
+            longest_run(&lbox),
+            5,
+            "{input} should be laid out as one five-glyph run"
+        );
+    }
+}
+
+#[test]
+fn inter_glyph_kern_changes_font_run_positions_and_width() {
+    use ratex_layout::layout_box::{BoxContent, LayoutBox};
+
+    fn glyph_positions(lbox: &LayoutBox) -> Option<Vec<f64>> {
+        match &lbox.content {
+            BoxContent::GlyphRun { glyphs } => Some(glyphs.iter().map(|glyph| glyph.x).collect()),
+            BoxContent::HBox(children) => children.iter().find_map(glyph_positions),
+            BoxContent::Scaled { body, .. } | BoxContent::RaiseBox { body, .. } => {
+                glyph_positions(body)
+            }
+            _ => None,
+        }
+    }
+
+    let ast = parse(r"\textrm{ab}").unwrap();
+    let plain = layout(&ast, &LayoutOptions::default());
+    let tracked = layout(&ast, &LayoutOptions::default().with_inter_glyph_kern(0.05));
+    let plain_positions = glyph_positions(&plain).expect("plain glyph run");
+    let tracked_positions = glyph_positions(&tracked).expect("tracked glyph run");
+
+    assert!((tracked.width - plain.width - 0.05).abs() < TOLERANCE);
+    assert!((tracked_positions[1] - plain_positions[1] - 0.05).abs() < TOLERANCE);
+}
+
+#[test]
 fn mathrm_sin() {
     check("\\mathrm{sin}", 0.6679, 0.0);
+}
+
+#[test]
+fn href_does_not_add_fixed_tracking_to_text_run() {
+    let options = LayoutOptions::default();
+    let linked = layout(
+        &parse(r"\href{https://example.com}{\texttt{AaBb123}}").unwrap(),
+        &options,
+    );
+    let plain = layout(&parse(r"\texttt{AaBb123}").unwrap(), &options);
+
+    assert!(
+        (linked.width - plain.width).abs() < TOLERANCE,
+        "href changed text width: linked={:.5}, plain={:.5}",
+        linked.width,
+        plain.width
+    );
 }
 
 /// `\mathrm{mm^{2}}` (e.g. mhchem `\pu{123 mm2}`): base of superscript must stay roman, not math italic.
@@ -595,10 +761,16 @@ fn mathrm_mm_squared_both_m_upright() {
     fn collect_m_fonts(lb: &LayoutBox) -> Vec<FontId> {
         let mut v = Vec::new();
         match &lb.content {
-            BoxContent::Glyph { font_id, char_code } => {
-                if *char_code == 'm' as u32 {
-                    v.push(*font_id);
-                }
+            BoxContent::Glyph { font_id, char_code } if *char_code == 'm' as u32 => {
+                v.push(*font_id);
+            }
+            BoxContent::GlyphRun { glyphs } => {
+                v.extend(
+                    glyphs
+                        .iter()
+                        .filter(|glyph| glyph.char_code == 'm' as u32)
+                        .map(|glyph| glyph.font_id),
+                );
             }
             BoxContent::HBox(children) => {
                 for c in children {
@@ -629,4 +801,49 @@ fn mathrm_mm_squared_both_m_upright() {
         m_fonts.iter().all(|&f| f == FontId::MainRegular),
         "both m should be MainRegular, got {m_fonts:?}"
     );
+}
+
+#[test]
+fn subscript_italic_kern_only_applies_to_symbol_nodes() {
+    use ratex_layout::layout_box::{BoxContent, LayoutBox};
+
+    fn sub_h_kern(lb: &LayoutBox) -> Option<f64> {
+        match &lb.content {
+            BoxContent::SupSub { sub_h_kern, .. } => Some(*sub_h_kern),
+            BoxContent::HBox(children) => children.iter().find_map(sub_h_kern),
+            _ => None,
+        }
+    }
+
+    fn kern_for(expr: &str) -> f64 {
+        let ast = parse(expr).expect("parse");
+        let lbox = layout(&ast, &LayoutOptions::default());
+        sub_h_kern(&lbox).expect("supsub box")
+    }
+
+    assert!(
+        kern_for(r"f_i") < 0.0,
+        "a direct math symbol keeps its italic kern"
+    );
+    assert!(
+        kern_for(r"\mathit{f}_i") < 0.0,
+        "a single-glyph font node builds a direct symbol"
+    );
+    assert!(
+        kern_for(r"\oiint_i") < 0.0,
+        "KaTeX special-cases synthetic multi-integral operators"
+    );
+
+    for expr in [
+        r"{f}_i",
+        r"\mathit{ff}_i",
+        r"\text{\textit{CPI}}_t",
+        r"\color{red}{f}_i",
+    ] {
+        assert_eq!(
+            kern_for(expr),
+            0.0,
+            "span/group base must not inherit a nested glyph's italic correction: {expr}"
+        );
+    }
 }

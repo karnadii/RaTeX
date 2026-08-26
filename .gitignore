@@ -1,6 +1,13 @@
 /target
 /out
 /output**
+/tests/golden/output*/
+/tests/golden/fixtures*/reference-manifest.json
+/tests/golden/reports/
+/tests/golden/diff*/
+.DS_Store
+__pycache__/
+*.py[cod]
 Cargo.lock
 # Machine-specific Cargo cross-compilation config (use env vars instead)
 /.cargo/

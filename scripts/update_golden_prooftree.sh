@@ -61,4 +61,11 @@ if [[ -s "$TMP_ERR_SVG" ]]; then
   grep '^ERR' "$TMP_ERR_SVG" || true
 fi
 
+python3 "$ROOT/tools/golden_compare/build_render_manifest.py" \
+  --test-cases "$TEST_CASES" \
+  --output "$OUTPUT_DIR" \
+  --error-log "$TMP_ERR" \
+  --json-out "$OUTPUT_DIR/render-manifest.json" \
+  --dpr 1
+
 echo "Done."

@@ -1,6 +1,6 @@
 {
   "name": "ratex-react-native",
-  "version": "0.1.12",
+  "version": "0.1.14",
   "description": "Native LaTeX rendering for React Native (no WebView)",
   "main": "lib/index.js",
   "react-native": "src/index.ts",
@@ -28,7 +28,7 @@
   "homepage": "https://github.com/erweixin/RaTeX",
   "codegenConfig": {
     "name": "RNRaTeXSpec",
-    "type": "components",
+    "type": "all",
     "jsSrcsDir": "src",
     "ios": {
       "componentProvider": {
@@ -41,13 +41,13 @@
     }
   },
   "peerDependencies": {
-    "react": "*",
-    "react-native": "*"
+    "react": ">=19.2.0",
+    "react-native": ">=0.84.0"
   },
   "devDependencies": {
-    "@types/react": "^18.0.0",
-    "react": "18.3.1",
-    "react-native": "0.76.0",
+    "@types/react": "^19.2.0",
+    "react": "19.2.3",
+    "react-native": "0.84.0",
     "typescript": "^5.0.0"
   },
   "keywords": [

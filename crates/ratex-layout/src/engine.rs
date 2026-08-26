@@ -9,7 +9,9 @@ use ratex_types::math_style::MathStyle;
 use ratex_types::path_command::PathCommand;
 
 use crate::hbox::make_hbox;
-use crate::layout_box::{BoxContent, LayoutBox, PlacedBox, ProofRule};
+use crate::layout_box::{
+    BoxContent, LayoutBox, PlacedBox, ProofRule, RunGlyph, VBoxChild, VBoxChildKind,
+};
 use crate::layout_options::LayoutOptions;
 
 use crate::katex_svg::parse_svg_path_data;
@@ -436,7 +438,7 @@ fn layout_node(node: &ParseNode, options: &LayoutOptions) -> LayoutBox {
             label_below.as_deref(),
             0.0,
             0.0,
-            0.0,
+            true,
             options,
         ),
 
@@ -724,6 +726,9 @@ fn layout_symbol(text: &str, mode: Mode, options: &LayoutOptions) -> LayoutBox {
     if text == "\\textunderscore" {
         return make_textunderscore_box(options);
     }
+    if let Some(fitted) = layout_symbol_from_render_spec(text, mode, options, None) {
+        return fitted;
+    }
 
     // Synthetic symbols not present in any KaTeX font; built from SVG paths.
     match ch as u32 {
@@ -798,6 +803,101 @@ fn layout_symbol(text: &str, mode: Mode, options: &LayoutOptions) -> LayoutBox {
         depth,
         content: BoxContent::Glyph { font_id, char_code },
         color: options.color,
+    }
+}
+
+/// Fit a bundled replacement glyph into another symbol's metric box.
+///
+/// This keeps the input symbol's TeX atom class independent from presentation:
+/// U+25CB WHITE CIRCLE remains an ordinary atom, while its bundled U+25EF glyph
+/// is uniformly scaled and centered in U+25A1 WHITE SQUARE's metric box.
+fn layout_symbol_from_render_spec(
+    text: &str,
+    mode: Mode,
+    options: &LayoutOptions,
+    preferred_source_font: Option<FontId>,
+) -> Option<LayoutBox> {
+    let symbol_mode = match mode {
+        Mode::Math => ratex_font::Mode::Math,
+        Mode::Text => ratex_font::Mode::Text,
+    };
+    let spec = ratex_font::get_symbol_render_spec(text, symbol_mode)?;
+    let symbol = ratex_font::get_symbol(text, symbol_mode)?;
+    let source_codepoint = symbol.codepoint? as u32;
+    let default_source_font = symbol_font_id(symbol.font);
+    let target_font = symbol_font_id(spec.target_font);
+
+    let (source_font, source) = preferred_source_font
+        .and_then(|font_id| {
+            get_char_metrics(font_id, source_codepoint).map(|metrics| (font_id, metrics))
+        })
+        .or_else(|| {
+            get_char_metrics(default_source_font, source_codepoint)
+                .map(|metrics| (default_source_font, metrics))
+        })?;
+    let target = get_char_metrics(target_font, spec.target_codepoint as u32)?;
+
+    let source_width = math_glyph_advance_em(&source, mode);
+    let source_total = source.height + source.depth;
+    let target_width = math_glyph_advance_em(&target, mode);
+    let target_total = target.height + target.depth;
+    if source_width <= 0.0 || source_total <= 0.0 || target_width <= 0.0 || target_total <= 0.0 {
+        return None;
+    }
+
+    // Preserve the replacement glyph's aspect ratio and contain it in the
+    // target box. Any spare space is divided equally on the corresponding axis.
+    let glyph_scale = (target_width / source_width).min(target_total / source_total);
+    let scaled_width = source_width * glyph_scale;
+    let side_padding = ((target_width - scaled_width) / 2.0).max(0.0);
+    let source_center = (source.height - source.depth) * glyph_scale / 2.0;
+    let target_center = (target.height - target.depth) / 2.0;
+    let raise = target_center - source_center;
+
+    let glyph = LayoutBox {
+        width: source_width,
+        height: source.height,
+        depth: source.depth,
+        content: BoxContent::Glyph {
+            font_id: source_font,
+            char_code: source_codepoint,
+        },
+        color: options.color,
+    };
+    let scaled = LayoutBox {
+        width: scaled_width,
+        height: source.height * glyph_scale,
+        depth: source.depth * glyph_scale,
+        content: BoxContent::Scaled {
+            body: Box::new(glyph),
+            child_scale: glyph_scale,
+        },
+        color: options.color,
+    };
+    let centered = LayoutBox {
+        width: scaled_width,
+        height: target.height,
+        depth: target.depth,
+        content: BoxContent::RaiseBox {
+            body: Box::new(scaled),
+            shift: raise,
+        },
+        color: options.color,
+    };
+
+    let mut result = make_hbox(vec![
+        LayoutBox::new_kern(side_padding),
+        centered,
+        LayoutBox::new_kern(side_padding),
+    ]);
+    result.color = options.color;
+    Some(result)
+}
+
+fn symbol_font_id(font: ratex_font::SymbolFont) -> FontId {
+    match font {
+        ratex_font::SymbolFont::Main => FontId::MainRegular,
+        ratex_font::SymbolFont::Ams => FontId::AmsRegular,
     }
 }
 
@@ -1115,10 +1215,22 @@ fn layout_supsub(
     // (KaTeX `margin-right: italic`), so we must not add `glyph_italic` again here.
     let italic_correction = 0.0;
 
-    // KaTeX `supsub.js`: for SymbolNode bases, subscripts get `margin-left: -base.italic` so they
-    // are not shifted by the base's italic correction (e.g. ∫_{A_1}).
+    // KaTeX `supsub.js`: only a direct `SymbolNode` base (plus the synthetic `\oiint` /
+    // `\oiiint` operators) gets `margin-left: -base.italic`.  In particular, spans such as
+    // `\text{\textit{CPI}}` and `{x}` must not inherit the italic correction of their last glyph.
     let sub_h_kern = if sub_box.is_some() && !center_scripts {
-        -glyph_italic(&base_box)
+        let direct_italic = direct_glyph_italic(&base_box);
+        let is_oiint = matches!(
+            base,
+            Some(ParseNode::Op {
+                name: Some(name),
+                ..
+            }) if name == "\\oiint" || name == "\\oiiint"
+        );
+        let base_italic = direct_italic
+            .or_else(|| is_oiint.then(|| first_glyph_italic(&base_box)).flatten())
+            .unwrap_or(0.0);
+        -base_italic
     } else {
         0.0
     };
@@ -1377,12 +1489,11 @@ fn build_op_base(
             Some(m) => (m.width, m.height, m.depth, m.italic),
             None => (1.0, 0.75, 0.25, 0.0),
         };
-        // Include italic correction in width so limits centered above/below don't overlap
-        // the operator's right-side extension (e.g. integral ∫ has non-zero italic).
-        let width_with_italic = width + italic;
-
         let base = LayoutBox {
-            width: width_with_italic,
+            // `LayoutBox::width` is the horizontal ink-safe advance consumed by
+            // the native rasterizer. Preserve the font's right italic overhang
+            // here while carrying `italic` separately as the limits slant.
+            width: width + italic,
             height,
             depth,
             content: BoxContent::Glyph { font_id, char_code },
@@ -1474,7 +1585,7 @@ fn layout_op_with_limits(
     sub_node: Option<&ParseNode>,
     options: &LayoutOptions,
 ) -> LayoutBox {
-    let (name, symbol, body, suppress_base_shift) = match base_node {
+    let (name, symbol, body, suppress_base_shift, is_operator_name) = match base_node {
         ParseNode::Op {
             name,
             symbol,
@@ -1486,15 +1597,20 @@ fn layout_op_with_limits(
             *symbol,
             body.as_deref(),
             suppress_base_shift.unwrap_or(false),
+            false,
         ),
-        ParseNode::OperatorName { body, .. } => (None, false, Some(body.as_slice()), false),
+        ParseNode::OperatorName { body, .. } => (None, false, Some(body.as_slice()), false, true),
         _ => return layout_supsub(Some(base_node), sup_node, sub_node, options, None),
     };
 
-    // KaTeX-exact limit kerning (no +0.08em) for `\overset`/`\underset` only (`suppress_base_shift`).
-    let legacy_limit_kern_padding = !suppress_base_shift;
-
-    let (base_box, slant) = build_op_base(name, symbol, body, options);
+    let (base_box, slant) = if is_operator_name {
+        (
+            layout_operatorname(body.expect("operatorname body"), options),
+            0.0,
+        )
+    } else {
+        build_op_base(name, symbol, body, options)
+    };
     // baseShift only applies to symbol operators (KaTeX: base instanceof SymbolNode)
     let base_shift = if symbol && !suppress_base_shift {
         compute_op_base_shift(&base_box, options)
@@ -1508,22 +1624,19 @@ fn layout_op_with_limits(
         sub_node,
         slant,
         base_shift,
-        legacy_limit_kern_padding,
+        !suppress_base_shift,
         options,
     )
 }
 
 /// Assemble an operator with limits above/below (KaTeX's `assembleSupSub`).
-///
-/// `legacy_limit_kern_padding`: +0.08em on limit kerns for all ops except `\overset`/`\underset`
-/// (`ParseNode::Op { suppress_base_shift: true }`), matching KaTeX on `\dddot`/`\ddddot` PNGs.
 fn layout_op_limits_inner(
     base: &LayoutBox,
     sup_node: Option<&ParseNode>,
     sub_node: Option<&ParseNode>,
     slant: f64,
     base_shift: f64,
-    legacy_limit_kern_padding: bool,
+    include_dom_strut: bool,
     options: &LayoutOptions,
 ) -> LayoutBox {
     let metrics = options.metrics();
@@ -1533,42 +1646,35 @@ fn layout_op_limits_inner(
     let sup_ratio = sup_style.size_multiplier() / options.style.size_multiplier();
     let sub_ratio = sub_style.size_multiplier() / options.style.size_multiplier();
 
-    let extra_kern = if legacy_limit_kern_padding {
-        0.08_f64
-    } else {
-        0.0_f64
-    };
-
     let sup_data = sup_node.map(|s| {
         let sup_opts = options.with_style(sup_style);
         let elem = layout_node(s, &sup_opts);
-        // `\overset`/`\underset`: KaTeX `assembleSupSub` uses `elem.depth` as-is. Other limits
-        // (e.g. `\lim\limits_x`) keep the legacy `depth * sup_ratio` term so ink scores stay
-        // aligned with our KaTeX PNG fixtures.
-        let d = if legacy_limit_kern_padding {
-            elem.depth * sup_ratio
-        } else {
-            elem.depth
-        };
-        let kern =
-            (metrics.big_op_spacing1 + extra_kern).max(metrics.big_op_spacing3 - d + extra_kern);
+        let kern = metrics
+            .big_op_spacing1
+            .max(metrics.big_op_spacing3 - elem.depth * sup_ratio);
         (elem, kern)
     });
 
     let sub_data = sub_node.map(|s| {
         let sub_opts = options.with_style(sub_style);
         let elem = layout_node(s, &sub_opts);
-        let h = if legacy_limit_kern_padding {
-            elem.height * sub_ratio
-        } else {
-            elem.height
-        };
-        let kern =
-            (metrics.big_op_spacing2 + extra_kern).max(metrics.big_op_spacing4 - h + extra_kern);
+        let kern = metrics
+            .big_op_spacing2
+            .max(metrics.big_op_spacing4 - elem.height * sub_ratio);
         (elem, kern)
     });
 
     let sp5 = metrics.big_op_spacing5;
+    // KaTeX's ordinary op-limits CSS vlist contributes a two-rule strut
+    // outside the visible limit gap. Synthetic `\overset`/`\underset`
+    // operators suppress that base/strut path. Keep the box extent separate
+    // from `sup_kern`/`sub_kern`: native ink uses the font-derived kern above,
+    // while enclosing layout sees the same ascent/depth as the KaTeX DOM.
+    let limit_strut = if include_dom_strut {
+        2.0 * metrics.default_rule_thickness
+    } else {
+        0.0
+    };
 
     let (total_height, total_depth, total_width) = match (&sup_data, &sub_data) {
         (Some((sup_elem, sup_kern)), Some((sub_elem, sub_kern))) => {
@@ -1584,8 +1690,8 @@ fn layout_op_limits_inner(
             let height = bottom + base.height - base_shift + sup_kern + sup_h + sup_d + sp5
                 - (base.height + base.depth);
 
-            let total_h = base.height - base_shift + sup_kern + sup_h + sup_d + sp5;
-            let total_d = bottom;
+            let total_h = base.height - base_shift + sup_kern + sup_h + sup_d + sp5 + limit_strut;
+            let total_d = bottom + limit_strut;
 
             let w = base
                 .width
@@ -1601,7 +1707,7 @@ fn layout_op_limits_inner(
             let sub_d = sub_elem.depth * sub_ratio;
 
             let total_h = base.height - base_shift;
-            let total_d = base.depth + base_shift + sub_kern + sub_h + sub_d + sp5;
+            let total_d = base.depth + base_shift + sub_kern + sub_h + sub_d + sp5 + limit_strut;
 
             let w = base.width.max(sub_elem.width * sub_ratio);
             (total_h, total_d, w)
@@ -1612,7 +1718,7 @@ fn layout_op_limits_inner(
             let sup_h = sup_elem.height * sup_ratio;
             let sup_d = sup_elem.depth * sup_ratio;
 
-            let total_h = base.height - base_shift + sup_kern + sup_h + sup_d + sp5;
+            let total_h = base.height - base_shift + sup_kern + sup_h + sup_d + sp5 + limit_strut;
             let total_d = base.depth + base_shift;
 
             let w = base.width.max(sup_elem.width * sup_ratio);
@@ -1684,16 +1790,28 @@ fn layout_operatorname(body: &[ParseNode], options: &LayoutOptions) -> LayoutBox
 /// `\vec` KaTeX SVG: nudge slightly right to match KaTeX reference.
 const VEC_SKEW_EXTRA_RIGHT_EM: f64 = 0.018;
 
-/// Extract the italic correction of the base glyph.
-/// Used by superscripts: KaTeX adds margin-right = italic_correction to italic math characters,
-/// so the superscript starts at advance_width + italic_correction (not just advance_width).
-fn glyph_italic(lb: &LayoutBox) -> f64 {
+/// Extract the italic correction only when this box itself is a glyph.
+///
+/// This distinction mirrors KaTeX's `base instanceof SymbolNode` check.  Recursing through an
+/// `HBox` would incorrectly treat text/group spans as symbols and pull their subscripts left.
+fn direct_glyph_italic(lb: &LayoutBox) -> Option<f64> {
     match &lb.content {
-        BoxContent::Glyph { font_id, char_code } => get_char_metrics(*font_id, *char_code)
-            .map(|m| m.italic)
-            .unwrap_or(0.0),
-        BoxContent::HBox(children) => children.last().map(glyph_italic).unwrap_or(0.0),
-        _ => 0.0,
+        BoxContent::Glyph { font_id, char_code } => {
+            get_char_metrics(*font_id, *char_code).map(|m| m.italic)
+        }
+        _ => None,
+    }
+}
+
+/// Find the first glyph inside a box.
+///
+/// KaTeX special-cases `\oiint` and `\oiiint`: their overlay makes the base a span rather than a
+/// `SymbolNode`, but the underlying integral glyph's italic correction still applies.
+fn first_glyph_italic(lb: &LayoutBox) -> Option<f64> {
+    match &lb.content {
+        BoxContent::Glyph { .. } => direct_glyph_italic(lb),
+        BoxContent::HBox(children) => children.iter().find_map(first_glyph_italic),
+        _ => None,
     }
 }
 
@@ -1709,12 +1827,215 @@ fn accent_ordgroup_len(base: &ParseNode) -> usize {
 }
 
 fn glyph_skew(lb: &LayoutBox) -> f64 {
-    match &lb.content {
-        BoxContent::Glyph { font_id, char_code } => get_char_metrics(*font_id, *char_code)
-            .map(|m| m.skew)
-            .unwrap_or(0.0),
-        BoxContent::HBox(children) => children.last().map(glyph_skew).unwrap_or(0.0),
-        _ => 0.0,
+    let mut current = lb;
+    loop {
+        match &current.content {
+            BoxContent::Glyph { font_id, char_code } => {
+                return get_char_metrics(*font_id, *char_code)
+                    .map(|m| m.skew)
+                    .unwrap_or(0.0);
+            }
+            BoxContent::HBox(children) => match children.last() {
+                Some(last) => current = last,
+                None => return 0.0,
+            },
+            BoxContent::GlyphRun { glyphs } => {
+                return glyphs
+                    .last()
+                    .and_then(|glyph| get_char_metrics(glyph.font_id, glyph.char_code))
+                    .map(|metrics| metrics.skew)
+                    .unwrap_or(0.0);
+            }
+            _ => return 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StretchyPlacement {
+    Above,
+    Below,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StretchySpec {
+    placement: StretchyPlacement,
+    gap: f64,
+}
+
+impl StretchySpec {
+    fn accent(label: &str, is_below: bool, options: &LayoutOptions) -> Self {
+        Self {
+            placement: if is_below {
+                StretchyPlacement::Below
+            } else {
+                StretchyPlacement::Above
+            },
+            // KaTeX accentunder.ts assigns only \utilde a 0.12em kern.
+            gap: if label == "\\utilde" {
+                3.0 * options.metrics().default_rule_thickness
+            } else {
+                0.0
+            },
+        }
+    }
+
+    fn horizontal_brace(is_over: bool, options: &LayoutOptions) -> Self {
+        Self {
+            placement: if is_over {
+                StretchyPlacement::Above
+            } else {
+                StretchyPlacement::Below
+            },
+            // KaTeX's 0.1em brace kern is 2.5 default rule units.
+            gap: 2.5 * options.metrics().default_rule_thickness,
+        }
+    }
+}
+
+fn padded_to_width(body: LayoutBox, width: f64) -> LayoutBox {
+    if width <= body.width + f64::EPSILON {
+        return body;
+    }
+    let pad = (width - body.width) / 2.0;
+    make_hbox(vec![
+        LayoutBox::new_kern(pad),
+        body,
+        LayoutBox::new_kern(pad),
+    ])
+}
+
+/// Dedicated geometry for AMSMath's triple/quadruple dot accents.
+///
+/// KaTeX exposes these commands through an `\overset` macro whose payload is a
+/// run of text periods. Keeping that expansion in the AST makes the result
+/// depend on text shaping, sizing resets, and operator-limit layout. Build the
+/// actual dot disks here instead: their advance and clearance are stable math
+/// geometry and no longer inherit text-run behavior.
+fn layout_multidot_accent(body: LayoutBox, dot_count: usize, options: &LayoutOptions) -> LayoutBox {
+    // The KaTeX macro wraps its dot payload in \normalsize. Math style and
+    // explicit \tiny...\Huge sizing both scale this entire box later, so
+    // compensate for both to keep only the mark at normal text size.
+    let normal_size_scale = 1.0 / (options.size_multiplier() * options.explicit_size_multiplier);
+    let advance = get_char_metrics(FontId::MainRegular, '.' as u32)
+        .map(|metrics| metrics.width)
+        .unwrap_or(0.27778)
+        * normal_size_scale;
+    let radius = 0.07_f64 * normal_size_scale;
+    let mark_width = advance * dot_count as f64;
+    let mark_height = radius * 2.0;
+    let bezier = 0.552_284_749_8_f64;
+    let mut commands = Vec::with_capacity(dot_count * 6);
+
+    for index in 0..dot_count {
+        let cx = advance * (index as f64 + 0.5);
+        let cy = -radius;
+        commands.extend([
+            PathCommand::MoveTo {
+                x: cx + radius,
+                y: cy,
+            },
+            PathCommand::CubicTo {
+                x1: cx + radius,
+                y1: cy - bezier * radius,
+                x2: cx + bezier * radius,
+                y2: cy - radius,
+                x: cx,
+                y: cy - radius,
+            },
+            PathCommand::CubicTo {
+                x1: cx - bezier * radius,
+                y1: cy - radius,
+                x2: cx - radius,
+                y2: cy - bezier * radius,
+                x: cx - radius,
+                y: cy,
+            },
+            PathCommand::CubicTo {
+                x1: cx - radius,
+                y1: cy + bezier * radius,
+                x2: cx - bezier * radius,
+                y2: cy + radius,
+                x: cx,
+                y: cy + radius,
+            },
+            PathCommand::CubicTo {
+                x1: cx + bezier * radius,
+                y1: cy + radius,
+                x2: cx + radius,
+                y2: cy + bezier * radius,
+                x: cx + radius,
+                y: cy,
+            },
+            PathCommand::Close,
+        ]);
+    }
+
+    let body = padded_to_width(body, mark_width);
+    let mark = LayoutBox {
+        width: mark_width,
+        height: mark_height,
+        depth: 0.0,
+        content: BoxContent::SvgPath {
+            commands,
+            fill: true,
+        },
+        color: options.color,
+    };
+    let clearance = body.height + 3.0 * options.metrics().default_rule_thickness;
+
+    LayoutBox {
+        width: body.width,
+        height: clearance + mark_height,
+        depth: body.depth,
+        content: BoxContent::Accent {
+            base: Box::new(body),
+            accent: Box::new(mark),
+            clearance,
+            skew: 0.0,
+            is_below: false,
+            under_gap_em: 0.0,
+        },
+        color: options.color,
+    }
+}
+
+/// Place a top-origin stretchy path with a shared clearance model.
+fn compose_stretchy(
+    base: LayoutBox,
+    accent: LayoutBox,
+    spec: StretchySpec,
+    skew: f64,
+    color: Color,
+) -> LayoutBox {
+    debug_assert!(accent.height.abs() <= 0.001);
+    debug_assert!((base.width - accent.width).abs() <= 0.001);
+
+    let is_below = spec.placement == StretchyPlacement::Below;
+    let clearance = if is_below {
+        base.height + base.depth + spec.gap
+    } else {
+        base.height + spec.gap
+    };
+    let (height, depth) = if is_below {
+        (base.height, base.depth + spec.gap + accent.depth)
+    } else {
+        (base.height + spec.gap + accent.depth, base.depth)
+    };
+
+    LayoutBox {
+        width: base.width,
+        height,
+        depth,
+        content: BoxContent::Accent {
+            base: Box::new(base),
+            accent: Box::new(accent),
+            clearance,
+            skew,
+            is_below,
+            under_gap_em: if is_below { spec.gap } else { 0.0 },
+        },
+        color,
     }
 }
 
@@ -1734,10 +2055,15 @@ fn layout_accent(
         return layout_textcircled(body_box, options);
     }
 
+    if matches!(label, "\\dddot" | "\\ddddot") {
+        return layout_multidot_accent(body_box, if label == "\\dddot" { 3 } else { 4 }, options);
+    }
+
     // Try KaTeX exact SVG paths first (widehat, widetilde, overgroup, etc.).
     // The path width must stay inside the accent box; renderers size their canvas from
     // DisplayList.width, so drawing wider than the box clips in an enclosing HBox.
-    let accent_target_w = base_w;
+    let accent_target_w =
+        base_w.max(crate::katex_svg::katex_stretchy_min_width_em(label).unwrap_or(0.0));
     if let Some((commands, w, h, fill)) =
         crate::katex_svg::katex_accent_path(label, accent_target_w, accent_ordgroup_len(base))
     {
@@ -1749,42 +2075,27 @@ fn layout_accent(
             content: BoxContent::SvgPath { commands, fill },
             color: options.color,
         };
+        if label != "\\vec" {
+            let body_box = padded_to_width(body_box, w);
+            return compose_stretchy(
+                body_box,
+                accent_box,
+                StretchySpec::accent(label, is_below, options),
+                0.0,
+                options.color,
+            );
+        }
+
         // KaTeX `accent.ts` uses `clearance = min(body.height, xHeight)` for ordinary accents.
-        // That matches fixed-size `\vec` (svgData.vec); using it for *width-scaled* SVG accents
-        // (\widehat, \widetilde, \overgroup, …) pulls the path down onto the base (golden 0604/0885/0886).
-        // Slightly tighter than 0.08em — aligns wide SVG hats with KaTeX PNG crops (e.g. 0935).
-        let gap = 0.065;
-        let under_gap_em = if is_below && label == "\\utilde" {
-            0.12
+        // KaTeX: clearance = min(body.height, xHeight) is used as *overlap* (kern down).
+        // Equivalent RaTeX position: vec bottom = body.height - overlap.
+        let clearance = (body_box.height - options.metrics().x_height).max(0.0);
+        let (height, depth) = (clearance + h, body_box.depth);
+        let vec_skew = (if is_shifty {
+            glyph_skew(&body_box)
         } else {
             0.0
-        };
-        let clearance = if is_below {
-            body_box.height + body_box.depth + gap
-        } else if label == "\\vec" {
-            // KaTeX: clearance = min(body.height, xHeight) is used as *overlap* (kern down).
-            // Equivalent RaTeX position: vec bottom = body.height - overlap = max(0, body.height - xHeight).
-            (body_box.height - options.metrics().x_height).max(0.0)
-        } else {
-            body_box.height + gap
-        };
-        let (height, depth) = if is_below {
-            (body_box.height, body_box.depth + h + gap + under_gap_em)
-        } else if label == "\\vec" {
-            // Box height = clearance + H_EM, matching KaTeX VList height.
-            (clearance + h, body_box.depth)
-        } else {
-            (body_box.height + gap + h, body_box.depth)
-        };
-        let vec_skew = if label == "\\vec" {
-            (if is_shifty {
-                glyph_skew(&body_box)
-            } else {
-                0.0
-            }) + VEC_SKEW_EXTRA_RIGHT_EM
-        } else {
-            0.0
-        };
+        }) + VEC_SKEW_EXTRA_RIGHT_EM;
         return LayoutBox {
             width: body_box.width,
             height,
@@ -1795,7 +2106,7 @@ fn layout_accent(
                 clearance,
                 skew: vec_skew,
                 is_below,
-                under_gap_em,
+                under_gap_em: 0.0,
             },
             color: options.color,
         };
@@ -1806,21 +2117,21 @@ fn layout_accent(
 
     let accent_box = if use_arrow_path {
         let (commands, arrow_h, fill_arrow) =
-            match crate::katex_svg::katex_stretchy_path(label, base_w) {
+            match crate::katex_svg::katex_stretchy_path(label, accent_target_w) {
                 Some((c, h)) => (c, h, true),
                 None => {
                     let h = 0.3_f64;
-                    let c = stretchy_accent_path(label, base_w, h);
+                    let c = stretchy_accent_path(label, accent_target_w, h);
                     let fill = label == "\\xtwoheadrightarrow" || label == "\\xtwoheadleftarrow";
                     (c, h, fill)
                 }
             };
         LayoutBox {
-            width: base_w,
-            height: arrow_h / 2.0,
-            depth: arrow_h / 2.0,
+            width: accent_target_w,
+            height: 0.0,
+            depth: arrow_h,
             content: BoxContent::SvgPath {
-                commands,
+                commands: shift_path_y(commands, arrow_h / 2.0),
                 fill: fill_arrow,
             },
             color: options.color,
@@ -1855,9 +2166,18 @@ fn layout_accent(
         }
     };
 
-    let skew = if use_arrow_path {
-        0.0
-    } else if is_shifty {
+    if use_arrow_path {
+        let body_box = padded_to_width(body_box, accent_box.width);
+        return compose_stretchy(
+            body_box,
+            accent_box,
+            StretchySpec::accent(label, is_below, options),
+            0.0,
+            options.color,
+        );
+    }
+
+    let skew = if is_shifty {
         // For shifty accents (\hat, \tilde, etc.) shift by the BASE character's skew,
         // which encodes the italic correction in math-italic fonts (e.g. M → 0.083em).
         glyph_skew(&body_box)
@@ -1865,28 +2185,8 @@ fn layout_accent(
         0.0
     };
 
-    // gap = clearance between body top and bottom of accent SVG.
-    // For arrow accents, the SVG path is centered (height=h/2, depth=h/2).
-    // The gap prevents the visible arrowhead / harpoon tip from overlapping the base top.
-    //
-    // KaTeX stretchy arrows with vb_height 522 have h/2 ≈ 0.261em; default gap=0.12 left
-    // too little room for tall caps (`\overleftrightarrow{AB}`, `\overleftarrow{AB}`,
-    // `\overleftharpoon{AB}`, …).  `\Overrightarrow` uses a taller glyph (vb 560) and keeps
-    // the slightly smaller kern used in prior tuning.
-    let gap = if use_arrow_path {
-        if label == "\\Overrightarrow" {
-            0.21
-        } else {
-            0.26
-        }
-    } else {
-        0.0
-    };
-
     let clearance = if is_below {
-        body_box.height + body_box.depth + accent_box.depth + gap
-    } else if use_arrow_path {
-        body_box.height + gap
+        body_box.height + body_box.depth + accent_box.depth
     } else {
         // Clearance = how high above baseline the accent is positioned.
         // - For simple letters (M, b, o): body_box.height is the letter top → use directly.
@@ -1976,10 +2276,8 @@ fn layout_accent(
     let (height, depth) = if is_below {
         (
             body_box.height,
-            body_box.depth + accent_box.height + accent_box.depth + gap,
+            body_box.depth + accent_box.height + accent_box.depth,
         )
-    } else if use_arrow_path {
-        (body_box.height + gap + accent_box.height, body_box.depth)
     } else {
         // to_display.rs shifts every glyph accent DOWN by max(0, accent.height - 0.35),
         // so the actual visual top of the accent mark = clearance + min(0.35, accent.height).
@@ -2021,107 +2319,120 @@ fn layout_accent(
 /// scope) is a Middle node.  A nested LeftRight starts its own scope, so its
 /// `\middle`s are handled by that nested layout pass.
 fn node_contains_middle(node: &ParseNode, style: MathStyle) -> bool {
-    match node {
-        ParseNode::Middle { .. } => true,
-        ParseNode::OrdGroup { body, .. } | ParseNode::MClass { body, .. } => {
-            body.iter().any(|n| node_contains_middle(n, style))
+    let mut pending = vec![(node, style)];
+    while let Some((current, current_style)) = pending.pop() {
+        match current {
+            ParseNode::Middle { .. } => return true,
+            ParseNode::OrdGroup { body, .. } | ParseNode::MClass { body, .. } => {
+                pending.extend(body.iter().map(|node| (node, current_style)));
+            }
+            ParseNode::SupSub { base, sup, sub, .. } => {
+                if let Some(base) = base {
+                    pending.push((base, current_style));
+                }
+                if let Some(sup) = sup {
+                    pending.push((sup, current_style.superscript()));
+                }
+                if let Some(sub) = sub {
+                    pending.push((sub, current_style.subscript()));
+                }
+            }
+            ParseNode::GenFrac { numer, denom, .. } => {
+                pending.push((numer, current_style.numerator()));
+                pending.push((denom, current_style.denominator()));
+            }
+            ParseNode::Sqrt { body, index, .. } => {
+                pending.push((body, current_style.cramped()));
+                if let Some(index) = index {
+                    pending.push((index, current_style.superscript().superscript()));
+                }
+            }
+            ParseNode::Accent { base, .. } | ParseNode::AccentUnder { base, .. } => {
+                pending.push((base, current_style));
+            }
+            ParseNode::Op {
+                body: Some(body), ..
+            }
+            | ParseNode::OperatorName { body, .. }
+            | ParseNode::Color { body, .. }
+            | ParseNode::Phantom { body, .. }
+            | ParseNode::Pmb { body, .. }
+            | ParseNode::Href { body, .. }
+            | ParseNode::Html { body, .. } => {
+                pending.extend(body.iter().map(|node| (node, current_style)));
+            }
+            // A nested LeftRight starts a new \middle scope.
+            ParseNode::LeftRight { .. } => {}
+            ParseNode::Font { body, .. }
+            | ParseNode::Overline { body, .. }
+            | ParseNode::Underline { body, .. }
+            | ParseNode::VPhantom { body, .. }
+            | ParseNode::Smash { body, .. }
+            | ParseNode::Enclose { body, .. }
+            | ParseNode::Lap { body, .. }
+            | ParseNode::RaiseBox { body, .. }
+            | ParseNode::VCenter { body, .. }
+            | ParseNode::HorizBrace { base: body, .. } => {
+                pending.push((body, current_style));
+            }
+            ParseNode::Text { body, .. } | ParseNode::Sizing { body, .. } => {
+                pending.extend(body.iter().map(|node| (node, current_style.text())));
+            }
+            ParseNode::Styling {
+                style: node_style,
+                body,
+                ..
+            } => {
+                let new_style = style_str_to_math_style(node_style);
+                pending.extend(body.iter().map(|node| (node, new_style)));
+            }
+            ParseNode::Array { body, .. } => {
+                pending.extend(
+                    body.iter()
+                        .flat_map(|row| row.iter())
+                        .map(|node| (node, current_style)),
+                );
+            }
+            ParseNode::XArrow { body, below, .. } => {
+                pending.push((body, current_style.superscript()));
+                if let Some(below) = below {
+                    pending.push((below, current_style.subscript()));
+                }
+            }
+            ParseNode::CdArrow {
+                label_above,
+                label_below,
+                ..
+            } => {
+                if let Some(above) = label_above {
+                    pending.push((above, current_style.superscript()));
+                }
+                if let Some(below) = label_below {
+                    pending.push((below, current_style.subscript()));
+                }
+            }
+            ParseNode::MathChoice {
+                display,
+                text,
+                script,
+                scriptscript,
+                ..
+            } => {
+                let branch = match current_style {
+                    MathStyle::Display | MathStyle::DisplayCramped => display,
+                    MathStyle::Text | MathStyle::TextCramped => text,
+                    MathStyle::Script | MathStyle::ScriptCramped => script,
+                    MathStyle::ScriptScript | MathStyle::ScriptScriptCramped => scriptscript,
+                };
+                pending.extend(branch.iter().map(|node| (node, current_style)));
+            }
+            ParseNode::HtmlMathMl { html, .. } => {
+                pending.extend(html.iter().map(|node| (node, current_style)));
+            }
+            _ => {}
         }
-        ParseNode::SupSub { base, sup, sub, .. } => {
-            base.as_deref()
-                .is_some_and(|n| node_contains_middle(n, style))
-                || sup
-                    .as_deref()
-                    .is_some_and(|n| node_contains_middle(n, style.superscript()))
-                || sub
-                    .as_deref()
-                    .is_some_and(|n| node_contains_middle(n, style.subscript()))
-        }
-        ParseNode::GenFrac { numer, denom, .. } => {
-            node_contains_middle(numer, style.numerator())
-                || node_contains_middle(denom, style.denominator())
-        }
-        ParseNode::Sqrt { body, index, .. } => {
-            node_contains_middle(body, style.cramped())
-                || index
-                    .as_deref()
-                    .is_some_and(|n| node_contains_middle(n, style.superscript().superscript()))
-        }
-        ParseNode::Accent { base, .. } | ParseNode::AccentUnder { base, .. } => {
-            node_contains_middle(base, style)
-        }
-        ParseNode::Op { body, .. } => body
-            .as_ref()
-            .is_some_and(|b| b.iter().any(|n| node_contains_middle(n, style))),
-        ParseNode::LeftRight { .. } => false,
-        ParseNode::OperatorName { body, .. } => body.iter().any(|n| node_contains_middle(n, style)),
-        ParseNode::Font { body, .. } => node_contains_middle(body, style),
-        ParseNode::Text { body, .. } | ParseNode::Sizing { body, .. } => {
-            body.iter().any(|n| node_contains_middle(n, style.text()))
-        }
-        ParseNode::Color { body, .. } => body.iter().any(|n| node_contains_middle(n, style)),
-        ParseNode::Styling {
-            style: node_style,
-            body,
-            ..
-        } => {
-            let new_style = style_str_to_math_style(node_style);
-            body.iter().any(|n| node_contains_middle(n, new_style))
-        }
-        ParseNode::Overline { body, .. } | ParseNode::Underline { body, .. } => {
-            node_contains_middle(body, style)
-        }
-        ParseNode::Phantom { body, .. } => body.iter().any(|n| node_contains_middle(n, style)),
-        ParseNode::VPhantom { body, .. } | ParseNode::Smash { body, .. } => {
-            node_contains_middle(body, style)
-        }
-        ParseNode::Array { body, .. } => body
-            .iter()
-            .any(|row| row.iter().any(|n| node_contains_middle(n, style))),
-        ParseNode::Enclose { body, .. }
-        | ParseNode::Lap { body, .. }
-        | ParseNode::RaiseBox { body, .. }
-        | ParseNode::VCenter { body, .. } => node_contains_middle(body, style),
-        ParseNode::Pmb { body, .. } => body.iter().any(|n| node_contains_middle(n, style)),
-        ParseNode::XArrow { body, below, .. } => {
-            node_contains_middle(body, style.superscript())
-                || below
-                    .as_deref()
-                    .is_some_and(|n| node_contains_middle(n, style.subscript()))
-        }
-        ParseNode::CdArrow {
-            label_above,
-            label_below,
-            ..
-        } => {
-            label_above
-                .as_deref()
-                .is_some_and(|n| node_contains_middle(n, style.superscript()))
-                || label_below
-                    .as_deref()
-                    .is_some_and(|n| node_contains_middle(n, style.subscript()))
-        }
-        ParseNode::MathChoice {
-            display,
-            text,
-            script,
-            scriptscript,
-            ..
-        } => {
-            let branch = match style {
-                MathStyle::Display | MathStyle::DisplayCramped => display,
-                MathStyle::Text | MathStyle::TextCramped => text,
-                MathStyle::Script | MathStyle::ScriptCramped => script,
-                MathStyle::ScriptScript | MathStyle::ScriptScriptCramped => scriptscript,
-            };
-            branch.iter().any(|n| node_contains_middle(n, style))
-        }
-        ParseNode::HorizBrace { base, .. } => node_contains_middle(base, style),
-        ParseNode::Href { body, .. } | ParseNode::Html { body, .. } => {
-            body.iter().any(|n| node_contains_middle(n, style))
-        }
-        ParseNode::HtmlMathMl { html, .. } => html.iter().any(|n| node_contains_middle(n, style)),
-        _ => false,
     }
+    false
 }
 
 /// Returns true if any node in the slice contains a Middle node governed by the
@@ -2237,6 +2548,28 @@ fn is_double_vert_delim(delim: &str) -> bool {
     matches!(delim, "\\|" | "\\Vert" | "\\lVert" | "\\rVert")
 }
 
+#[derive(Debug, Clone, Copy)]
+struct VertDelimGeometry {
+    width: f64,
+    height: f64,
+    depth: f64,
+    view_box_height: i64,
+    middle_height: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum VertDelimKind {
+    Stretchy,
+    Sized,
+}
+
+/// Fixed em scale of the locked KaTeX reference wrapper (`.katex` is 1.21em).
+///
+/// The golden renderer uses a 40px base em while the browser SVG is rasterized
+/// through that wrapper. Apply one suite-wide scale to sized paths instead of
+/// the previous height-dependent per-command multipliers.
+const KATEX_SIZED_DELIM_SCALE: f64 = 1.2;
+
 /// KaTeX `delimiter.makeStackedDelim`: total span of one repeat piece (U+2223 / U+2225) in Size1-Regular.
 fn vert_repeat_piece_height(is_double: bool) -> f64 {
     let code = if is_double { 8741_u32 } else { 8739 };
@@ -2245,20 +2578,36 @@ fn vert_repeat_piece_height(is_double: bool) -> f64 {
         .unwrap_or(0.5)
 }
 
-/// Match KaTeX `realHeightTotal` for stack-always `|` / `\Vert` delimiters.
-fn katex_vert_real_height(requested_total: f64, is_double: bool, is_sized_delim: bool) -> f64 {
+/// Match KaTeX `makeStackedDelim` for stack-always `|` / `\Vert` delimiters.
+///
+/// This object is the single source of truth for the SVG viewBox, TeX box
+/// bounds, and axis split. Keeping those values together avoids scaling the
+/// path independently from the box that contains it.
+fn stacked_vert_geometry(
+    requested_total: f64,
+    is_double: bool,
+    kind: VertDelimKind,
+    options: &LayoutOptions,
+) -> VertDelimGeometry {
     let piece = vert_repeat_piece_height(is_double);
-    let min_h = 2.0 * piece;
-    let repeat_count = ((requested_total - min_h) / piece).ceil().max(0.0);
-    let mut h = min_h + repeat_count * piece;
-    // KaTeX's sized vertical bars are CSS SVG spans with a slightly taller ink
-    // crop in browser screenshots than our native path rasterization. Keep this
-    // adjustment scoped to \big/\Big/\bigg/\Bigg so ordinary stretchy \left bars
-    // still follow content height directly.
-    if is_sized_delim && !is_double {
-        h *= if requested_total < 3.0 { 1.2 } else { 1.135 };
+    let minimum_total = 2.0 * piece;
+    let repeat_count = ((requested_total - minimum_total) / piece).ceil().max(0.0);
+    let logical_total = minimum_total + repeat_count * piece;
+    let axis = options.metrics().axis_height;
+    let logical_depth = logical_total / 2.0 - axis;
+    let logical_height = logical_total - logical_depth;
+    let scale = match kind {
+        VertDelimKind::Stretchy => 1.0,
+        VertDelimKind::Sized => KATEX_SIZED_DELIM_SCALE,
+    };
+
+    VertDelimGeometry {
+        width: if is_double { 0.556 } else { 0.333 },
+        height: logical_height * scale,
+        depth: logical_depth * scale,
+        view_box_height: (logical_total * 1000.0).round() as i64,
+        middle_height: ((logical_total - minimum_total) * 1000.0).round() as i64,
     }
-    h
 }
 
 /// KaTeX `svgGeometry.tallDelim` paths for `"vert"` / `"doublevert"` (viewBox units per em width).
@@ -2368,6 +2717,28 @@ fn make_shortmid_box(options: &LayoutOptions) -> LayoutBox {
         content: BoxContent::SvgPath {
             commands,
             fill: true,
+        },
+        color: options.color,
+    }
+}
+
+/// Natural Main-Regular U+2223/U+2225 delimiter.
+///
+/// KaTeX traverses the small-glyph sequence before choosing a stacked SVG.
+/// Keeping the natural form as a glyph preserves its font hinting; only the
+/// stacked form needs path geometry.
+fn make_natural_vert_delim_box(is_double: bool, options: &LayoutOptions) -> LayoutBox {
+    let char_code = if is_double { 8741 } else { 8739 };
+    let metrics = get_char_metrics(FontId::MainRegular, char_code)
+        .expect("KaTeX Main-Regular vertical delimiter metrics");
+
+    LayoutBox {
+        width: metrics.width,
+        height: metrics.height,
+        depth: metrics.depth,
+        content: BoxContent::Glyph {
+            font_id: FontId::MainRegular,
+            char_code,
         },
         color: options.color,
     }
@@ -2510,29 +2881,24 @@ fn make_measured_by_symbol(options: &LayoutOptions) -> LayoutBox {
 fn make_vert_delim_box(
     total_height: f64,
     is_double: bool,
-    is_sized_delim: bool,
+    kind: VertDelimKind,
     options: &LayoutOptions,
 ) -> LayoutBox {
-    let real_h = katex_vert_real_height(total_height, is_double, is_sized_delim);
-    let axis = options.metrics().axis_height;
-    let depth = (real_h / 2.0 - axis).max(0.0);
-    let height = real_h - depth;
-    let width = if is_double { 0.556 } else { 0.333 };
-
-    let piece = vert_repeat_piece_height(is_double);
-    let mid_em = (real_h - 2.0 * piece).max(0.0);
-    let mid_th = (mid_em * 1000.0).round() as i64;
-    let view_box_height = (real_h * 1000.0).round() as i64;
-
-    let d = tall_vert_svg_path_data(mid_th, is_double);
+    let geometry = stacked_vert_geometry(total_height, is_double, kind, options);
+    let d = tall_vert_svg_path_data(geometry.middle_height, is_double);
     let raw = parse_svg_path_data(&d);
     let scaled = scale_svg_path_to_em(&raw);
-    let commands = map_vert_path_y_to_baseline(scaled, height, depth, view_box_height);
+    let commands = map_vert_path_y_to_baseline(
+        scaled,
+        geometry.height,
+        geometry.depth,
+        geometry.view_box_height,
+    );
 
     LayoutBox {
-        width,
-        height,
-        depth,
+        width: geometry.width,
+        height: geometry.height,
+        depth: geometry.depth,
         content: BoxContent::SvgPath {
             commands,
             fill: true,
@@ -2549,13 +2915,22 @@ fn make_stretchy_delim(delim: &str, total_height: f64, options: &LayoutOptions) 
 
     // stackAlwaysDelimiters: use SVG path only when the required height exceeds
     // the natural font-glyph height (1.0em for single vert, same for double).
-    // When the content is small enough, fall through to the normal font glyph.
+    // Natural bars keep font hinting; stacked bars use the unified path/box
+    // geometry above.
     const VERT_NATURAL_HEIGHT: f64 = 1.0; // MainRegular |: 0.75+0.25
-    if is_vert_delim(delim) && total_height > VERT_NATURAL_HEIGHT {
-        return make_vert_delim_box(total_height, false, false, options);
+    if is_vert_delim(delim) {
+        return if total_height > VERT_NATURAL_HEIGHT {
+            make_vert_delim_box(total_height, false, VertDelimKind::Stretchy, options)
+        } else {
+            make_natural_vert_delim_box(false, options)
+        };
     }
-    if is_double_vert_delim(delim) && total_height > VERT_NATURAL_HEIGHT {
-        return make_vert_delim_box(total_height, true, false, options);
+    if is_double_vert_delim(delim) {
+        return if total_height > VERT_NATURAL_HEIGHT {
+            make_vert_delim_box(total_height, true, VertDelimKind::Stretchy, options)
+        } else {
+            make_natural_vert_delim_box(true, options)
+        };
     }
 
     // Normalize < > to \langle \rangle for proper angle bracket glyphs
@@ -2610,11 +2985,11 @@ fn layout_delim_sizing(size: u8, delim: &str, options: &LayoutOptions) -> Layout
     // stackAlwaysDelimiters: render as SVG path at the fixed size height
     if is_vert_delim(delim) {
         let total = SIZE_TO_MAX_HEIGHT[size.min(4) as usize];
-        return make_vert_delim_box(total, false, true, options);
+        return make_vert_delim_box(total, false, VertDelimKind::Sized, options);
     }
     if is_double_vert_delim(delim) {
         let total = SIZE_TO_MAX_HEIGHT[size.min(4) as usize];
-        return make_vert_delim_box(total, true, true, options);
+        return make_vert_delim_box(total, true, VertDelimKind::Sized, options);
     }
 
     // Normalize angle brackets to proper math angle bracket glyphs
@@ -2659,6 +3034,84 @@ fn layout_delim_sizing(size: u8, delim: &str, options: &LayoutOptions) -> Layout
 // Array / Matrix layout
 // ============================================================================
 
+/// Shared row/column measurement for table-like layouts.
+///
+/// Arrays and commutative diagrams differ in how their cells are built, but
+/// they must agree on the geometry contract consumed by `BoxContent::Array`:
+/// each column owns one maximum width and each row owns one ascent/depth pair.
+#[derive(Debug, Clone)]
+struct GridMetrics {
+    col_widths: Vec<f64>,
+    row_heights: Vec<f64>,
+    row_depths: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GridDimensions {
+    width: f64,
+    total_height: f64,
+    offset: f64,
+}
+
+impl GridMetrics {
+    fn measure(
+        cells: &[Vec<LayoutBox>],
+        num_cols: usize,
+        min_row_height: f64,
+        min_row_depth: f64,
+    ) -> Self {
+        let mut col_widths = vec![0.0_f64; num_cols];
+        let mut row_heights = Vec::with_capacity(cells.len());
+        let mut row_depths = Vec::with_capacity(cells.len());
+
+        for row in cells {
+            let mut row_height = min_row_height;
+            let mut row_depth = min_row_depth;
+            for (column, cell) in row.iter().take(num_cols).enumerate() {
+                col_widths[column] = col_widths[column].max(cell.width);
+                row_height = row_height.max(cell.height);
+                row_depth = row_depth.max(cell.depth);
+            }
+            row_heights.push(row_height);
+            row_depths.push(row_depth);
+        }
+
+        Self {
+            col_widths,
+            row_heights,
+            row_depths,
+        }
+    }
+
+    fn dimensions(
+        &self,
+        col_gaps: &[f64],
+        axis_height: f64,
+        content_x_offset: f64,
+        content_x_end_offset: f64,
+    ) -> GridDimensions {
+        debug_assert_eq!(col_gaps.len(), self.col_widths.len().saturating_sub(1));
+        debug_assert_eq!(self.row_heights.len(), self.row_depths.len());
+
+        let width = self.col_widths.iter().sum::<f64>()
+            + col_gaps.iter().sum::<f64>()
+            + content_x_offset
+            + content_x_end_offset;
+        let total_height = self
+            .row_heights
+            .iter()
+            .zip(&self.row_depths)
+            .map(|(height, depth)| height + depth)
+            .sum::<f64>();
+
+        GridDimensions {
+            width,
+            total_height,
+            offset: total_height / 2.0 + axis_height,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn layout_array(
     body: &[Vec<ParseNode>],
@@ -2680,27 +3133,17 @@ fn layout_array(
     let arrayskip = arraystretch * baselineskip;
     let arstrut_h = 0.7 * arrayskip;
     let arstrut_d = 0.3 * arrayskip;
-    // align/aligned/alignedat: use thin space (3mu) so "x" and "=" are closer,
-    // and cap relation spacing in cells to 3mu so spacing before/after "=" is equal.
-    const ALIGN_RELATION_MU: f64 = 3.0;
-    let col_gap = match col_sep_type {
-        Some("align") => mu_to_em(ALIGN_RELATION_MU, metrics.quad),
-        Some("alignat") => 0.0,
+    let default_side_gap = match col_sep_type {
         Some("small") => {
-            // smallmatrix: 2 × thickspace × (script_multiplier / current_multiplier)
+            // smallmatrix: thickspace × (script_multiplier / current_multiplier)
             // KaTeX: arraycolsep = 0.2778em × (scriptMultiplier / sizeMultiplier)
-            2.0 * mu_to_em(5.0, metrics.quad) * MathStyle::Script.size_multiplier()
+            mu_to_em(5.0, metrics.quad) * MathStyle::Script.size_multiplier()
                 / options.size_multiplier()
         }
-        _ => 2.0 * 5.0 * pt, // 2 × arraycolsep
+        Some("align") | Some("alignat") => 0.0,
+        _ => 5.0 * pt, // arraycolsep
     };
-    let cell_options = match col_sep_type {
-        Some("align") | Some("alignat") => LayoutOptions {
-            align_relation_spacing: Some(ALIGN_RELATION_MU),
-            ..options.clone()
-        },
-        _ => options.clone(),
-    };
+    let cell_options = options.clone();
 
     let num_rows = body.len();
     if num_rows == 0 {
@@ -2711,14 +3154,14 @@ fn layout_array(
 
     // Extract per-column alignment and column separators from cols spec.
     use ratex_parser::parse_node::AlignType;
+    let align_specs: Vec<&ratex_parser::parse_node::AlignSpec> = cols
+        .map(|cs| {
+            cs.iter()
+                .filter(|s| matches!(s.align_type, AlignType::Align))
+                .collect()
+        })
+        .unwrap_or_default();
     let col_aligns: Vec<u8> = {
-        let align_specs: Vec<&ratex_parser::parse_node::AlignSpec> = cols
-            .map(|cs| {
-                cs.iter()
-                    .filter(|s| matches!(s.align_type, AlignType::Align))
-                    .collect()
-            })
-            .unwrap_or_default();
         (0..num_cols)
             .map(|c| {
                 align_specs
@@ -2729,6 +3172,18 @@ fn layout_array(
             })
             .collect()
     };
+    let side_gaps: Vec<(f64, f64)> = (0..num_cols)
+        .map(|c| {
+            let spec = align_specs.get(c);
+            (
+                spec.and_then(|s| s.pregap).unwrap_or(default_side_gap),
+                spec.and_then(|s| s.postgap).unwrap_or(default_side_gap),
+            )
+        })
+        .collect();
+    let col_gaps: Vec<f64> = (0..num_cols.saturating_sub(1))
+        .map(|c| side_gaps[c].1 + side_gaps[c + 1].0)
+        .collect();
 
     // Detect vertical separator positions in the column spec.
     // col_separators[i]: None = no rule, Some(false) = solid '|', Some(true) = dashed ':'.
@@ -2761,26 +3216,15 @@ fn layout_array(
 
     // Layout all cells
     let mut cell_boxes: Vec<Vec<LayoutBox>> = Vec::with_capacity(num_rows);
-    let mut col_widths = vec![0.0_f64; num_cols];
-    let mut row_heights = Vec::with_capacity(num_rows);
-    let mut row_depths = Vec::with_capacity(num_rows);
-
     for row in body {
         let mut row_boxes = Vec::with_capacity(num_cols);
-        let mut rh = arstrut_h;
-        let mut rd = arstrut_d;
 
-        for (c, cell) in row.iter().enumerate() {
+        for cell in row {
             let cell_nodes = match cell {
                 ParseNode::OrdGroup { body, .. } => body.as_slice(),
                 other => std::slice::from_ref(other),
             };
             let cell_box = layout_expression(cell_nodes, &cell_options, true);
-            rh = rh.max(cell_box.height);
-            rd = rd.max(cell_box.depth);
-            if c < num_cols {
-                col_widths[c] = col_widths[c].max(cell_box.width);
-            }
             row_boxes.push(cell_box);
         }
 
@@ -2789,13 +3233,20 @@ fn layout_array(
             row_boxes.push(LayoutBox::new_empty());
         }
 
-        if add_jot {
-            rd += jot;
-        }
-
-        row_heights.push(rh);
-        row_depths.push(rd);
         cell_boxes.push(row_boxes);
+    }
+
+    let GridMetrics {
+        col_widths,
+        mut row_heights,
+        mut row_depths,
+    } = GridMetrics::measure(&cell_boxes, num_cols, arstrut_h, arstrut_d);
+
+    // KaTeX adds \jot between rows, never below the final row.
+    if add_jot {
+        for row_depth in row_depths.iter_mut().take(num_rows.saturating_sub(1)) {
+            *row_depth += jot;
+        }
     }
 
     // Apply row gaps
@@ -2835,24 +3286,31 @@ fn layout_array(
         }
     }
 
-    // Total height and offset (computed after extra hline spacing is applied).
-    let mut total_height = 0.0;
-    let mut row_positions = Vec::with_capacity(num_rows);
-    for r in 0..num_rows {
-        total_height += row_heights[r];
-        row_positions.push(total_height);
-        total_height += row_depths[r];
-    }
-
-    let offset = total_height / 2.0 + metrics.axis_height;
-
     // Extra x padding before col 0 and after last col (hskip_before_and_after).
-    let content_x_offset = if hskip { col_gap / 2.0 } else { 0.0 };
+    let content_x_offset = if hskip {
+        side_gaps.first().map(|g| g.0).unwrap_or(0.0)
+    } else {
+        0.0
+    };
+    let content_x_end_offset = if hskip {
+        side_gaps.last().map(|g| g.1).unwrap_or(0.0)
+    } else {
+        0.0
+    };
 
     // Width of the cell grid including horizontal padding (no tag column).
-    let array_inner_width: f64 = col_widths.iter().sum::<f64>()
-        + col_gap * (num_cols.saturating_sub(1)) as f64
-        + 2.0 * content_x_offset;
+    let grid_dimensions = GridMetrics {
+        col_widths: col_widths.clone(),
+        row_heights: row_heights.clone(),
+        row_depths: row_depths.clone(),
+    }
+    .dimensions(
+        &col_gaps,
+        metrics.axis_height,
+        content_x_offset,
+        content_x_end_offset,
+    );
+    let array_inner_width = grid_dimensions.width;
 
     let mut row_tag_boxes: Vec<Option<LayoutBox>> = (0..num_rows).map(|_| None).collect();
     let mut tag_col_width = 0.0_f64;
@@ -2871,7 +3329,10 @@ fn layout_array(
         }
     }
     let tag_gap_em = if tag_col_width > 0.0 {
-        text_opts.metrics().quad
+        // Compact automatic equation numbers need the extra 0.1em reserved by
+        // KaTeX's block tag column; wide explicit tags retain the standard 1em.
+        let gap_factor = if tag_col_width > 2.0 { 1.0 } else { 1.1 };
+        gap_factor * text_opts.metrics().quad
     } else {
         0.0
     };
@@ -2880,8 +3341,8 @@ fn layout_array(
 
     let total_width = array_inner_width + tag_gap_em + tag_col_width;
 
-    let height = offset;
-    let depth = total_height - offset;
+    let height = grid_dimensions.offset;
+    let depth = grid_dimensions.total_height - grid_dimensions.offset;
 
     LayoutBox {
         width: total_width,
@@ -2893,9 +3354,10 @@ fn layout_array(
             col_aligns,
             row_heights: row_heights.clone(),
             row_depths: row_depths.clone(),
-            col_gap,
-            offset,
+            col_gaps: col_gaps.into_boxed_slice(),
+            offset: grid_dimensions.offset,
             content_x_offset,
+            content_x_end_offset,
             col_separators,
             hlines_before_row,
             rule_thickness,
@@ -2932,9 +3394,14 @@ fn layout_sizing(size: u8, body: &[ParseNode], options: &LayoutOptions) -> Layou
     };
 
     // KaTeX `Options.havingSize`: inner is built in `this.style.text()` (≥ textstyle).
-    let inner_opts = options.with_style(options.style.text());
+    // Keep the requested size as absolute layout state so nested sizing resets
+    // replace, rather than compound with, the surrounding explicit size.
+    let current_multiplier = options.size_multiplier() * options.explicit_size_multiplier;
+    let inner_opts = options
+        .with_style(options.style.text())
+        .with_explicit_size_multiplier(multiplier);
     let inner = layout_expression(body, &inner_opts, true);
-    let ratio = multiplier / options.size_multiplier();
+    let ratio = multiplier / current_multiplier;
     if (ratio - 1.0).abs() < 0.001 {
         inner
     } else {
@@ -3130,13 +3597,97 @@ fn layout_verb(body: &str, star: bool, options: &LayoutOptions) -> LayoutBox {
     hbox
 }
 
-/// Lay out `\text{…}` / `HBox` contents as a simple horizontal row.
-///
-/// KaTeX's HTML builder may merge consecutive text symbols into **one** DOM text run; the
-/// browser then applies OpenType kerning (GPOS) on that run. We place each character using
-/// bundled TeX metrics only (no GPOS), so compared to Puppeteer+KaTeX PNGs, long `\text{…}`
-/// strings can appear slightly wider with a small cumulative horizontal shift — not a wrong
-/// font file, but a shaping model difference.
+fn glyph_run_box(children: Vec<LayoutBox>, color: Color, inter_glyph_kern: f64) -> LayoutBox {
+    let inter_glyph_kern = if inter_glyph_kern > 0.0 {
+        inter_glyph_kern
+    } else {
+        0.0
+    };
+    let gap_count = children.len().saturating_sub(1);
+    let width =
+        children.iter().map(|child| child.width).sum::<f64>() + gap_count as f64 * inter_glyph_kern;
+    let height = children
+        .iter()
+        .map(|child| child.height)
+        .fold(0.0_f64, f64::max);
+    let depth = children
+        .iter()
+        .map(|child| child.depth)
+        .fold(0.0_f64, f64::max);
+    let mut x = 0.0;
+    let glyph_count = children.len();
+    let glyphs = children
+        .into_iter()
+        .enumerate()
+        .map(|(index, child)| {
+            let BoxContent::Glyph { font_id, char_code } = child.content else {
+                unreachable!("glyph_run_box only accepts glyph boxes");
+            };
+            let glyph = RunGlyph {
+                x,
+                font_id,
+                char_code,
+            };
+            x += child.width;
+            if index + 1 < glyph_count {
+                x += inter_glyph_kern;
+            }
+            glyph
+        })
+        .collect();
+
+    LayoutBox {
+        width,
+        height,
+        depth,
+        content: BoxContent::GlyphRun { glyphs },
+        color,
+    }
+}
+
+/// Coalesce adjacent glyphs into internal text runs while retaining structural
+/// boxes (accents, inline math, spacing commands, fallback images) as run
+/// boundaries.
+fn make_text_runs(children: Vec<LayoutBox>, color: Color, inter_glyph_kern: f64) -> LayoutBox {
+    let inter_glyph_kern = if inter_glyph_kern > 0.0 {
+        inter_glyph_kern
+    } else {
+        0.0
+    };
+    let mut output = Vec::new();
+    let mut pending_glyphs = Vec::new();
+    let mut has_previous_child = false;
+
+    let flush = |pending: &mut Vec<LayoutBox>, output: &mut Vec<LayoutBox>| {
+        if !pending.is_empty() {
+            output.push(glyph_run_box(
+                std::mem::take(pending),
+                color,
+                inter_glyph_kern,
+            ));
+        }
+    };
+
+    for child in children {
+        if matches!(child.content, BoxContent::Glyph { .. }) && child.color == color {
+            if pending_glyphs.is_empty() && has_previous_child && inter_glyph_kern > 0.0 {
+                output.push(LayoutBox::new_kern(inter_glyph_kern));
+            }
+            pending_glyphs.push(child);
+        } else {
+            flush(&mut pending_glyphs, &mut output);
+            if has_previous_child && inter_glyph_kern > 0.0 {
+                output.push(LayoutBox::new_kern(inter_glyph_kern));
+            }
+            output.push(child);
+        }
+        has_previous_child = true;
+    }
+    flush(&mut pending_glyphs, &mut output);
+    make_hbox(output)
+}
+
+/// Lay out `\text{…}` / `HBox` contents as positioned glyph runs.
 fn layout_text(body: &[ParseNode], options: &LayoutOptions) -> LayoutBox {
     let mut children = Vec::new();
     for node in body {
@@ -3152,7 +3703,7 @@ fn layout_text(body: &[ParseNode], options: &LayoutOptions) -> LayoutBox {
             }
         }
     }
-    make_hbox(children)
+    make_text_runs(children, options.color, 0.0)
 }
 
 /// Layout \pmb — poor man's bold via CSS-style text shadow.
@@ -3509,8 +4060,18 @@ fn layout_angl(body: &ParseNode, options: &LayoutOptions) -> LayoutBox {
 }
 
 fn layout_font(font: &str, body: &ParseNode, options: &LayoutOptions) -> LayoutBox {
+    if matches!(font, "text" | "\\text") {
+        return match body {
+            ParseNode::OrdGroup { body, .. } => layout_text(body, options),
+            _ => layout_node(body, options),
+        };
+    }
+
     let font_id = match font {
-        "mathrm" | "\\mathrm" | "textrm" | "\\textrm" | "rm" | "\\rm" => Some(FontId::MainRegular),
+        "textnormal" | "\\textnormal" | "textmd" | "\\textmd" | "textup" | "\\textup"
+        | "mathrm" | "\\mathrm" | "textrm" | "\\textrm" | "rm" | "\\rm" => {
+            Some(FontId::MainRegular)
+        }
         "mathbf" | "\\mathbf" | "textbf" | "\\textbf" | "bf" | "\\bf" => Some(FontId::MainBold),
         "mathit" | "\\mathit" | "it" | "\\it" => Some(FontId::MathItalic),
         "textit" | "\\textit" | "\\emph" => Some(FontId::MainItalic),
@@ -3534,15 +4095,11 @@ fn layout_font(font: &str, body: &ParseNode, options: &LayoutOptions) -> LayoutB
 fn layout_with_font(node: &ParseNode, font_id: FontId, options: &LayoutOptions) -> LayoutBox {
     match node {
         ParseNode::OrdGroup { body, .. } => {
-            let kern = options.inter_glyph_kern_em;
-            let mut children: Vec<LayoutBox> = Vec::with_capacity(body.len().saturating_mul(2));
-            for (i, n) in body.iter().enumerate() {
-                if i > 0 && kern > 0.0 {
-                    children.push(LayoutBox::new_kern(kern));
-                }
-                children.push(layout_with_font(n, font_id, options));
-            }
-            make_hbox(children)
+            let children = body
+                .iter()
+                .map(|node| layout_with_font(node, font_id, options))
+                .collect();
+            make_text_runs(children, options.color, options.inter_glyph_kern_em)
         }
         ParseNode::SupSub { base, sup, sub, .. } => {
             if let Some(base_node) = base.as_deref() {
@@ -3566,6 +4123,11 @@ fn layout_with_font(node: &ParseNode, font_id: FontId, options: &LayoutOptions) 
         ParseNode::MathOrd { text, mode, .. }
         | ParseNode::TextOrd { text, mode, .. }
         | ParseNode::Atom { text, mode, .. } => {
+            if let Some(fitted) =
+                layout_symbol_from_render_spec(text, *mode, options, Some(font_id))
+            {
+                return fitted;
+            }
             let ch = resolve_symbol_char(text, *mode);
             let char_code = ch as u32;
             let metric_cp = ratex_font::font_and_metric_for_mathematical_alphanumeric(char_code)
@@ -3593,21 +4155,49 @@ fn layout_with_font(node: &ParseNode, font_id: FontId, options: &LayoutOptions) 
 // Overline / Underline
 // ============================================================================
 
+#[derive(Debug, Clone, Copy)]
+struct RuleGeometry {
+    thickness: f64,
+    line_center_offset: f64,
+    total_extent: f64,
+}
+
+impl RuleGeometry {
+    fn overline(options: &LayoutOptions) -> Self {
+        let thickness = options.metrics().default_rule_thickness;
+        Self {
+            thickness,
+            // KaTeX vlist: 3r clearance, then the r-thick rule.
+            line_center_offset: 3.5 * thickness,
+            // One additional rule unit is retained at the outer edge.
+            total_extent: 5.0 * thickness,
+        }
+    }
+
+    fn underline(options: &LayoutOptions) -> Self {
+        let thickness = options.metrics().default_rule_thickness;
+        Self {
+            thickness,
+            line_center_offset: 4.0 * thickness,
+            total_extent: 4.5 * thickness,
+        }
+    }
+}
+
 fn layout_overline(body: &ParseNode, options: &LayoutOptions) -> LayoutBox {
     let cramped = options.with_style(options.style.cramped());
     let body_box = layout_node(body, &cramped);
-    let metrics = options.metrics();
-    let rule = metrics.default_rule_thickness;
+    let rule = RuleGeometry::overline(options);
 
-    // Total height: body height + 2*rule clearance + rule thickness = body.height + 3*rule
-    let height = body_box.height + 3.0 * rule;
+    let height = body_box.height + rule.total_extent;
     LayoutBox {
         width: body_box.width,
         height,
         depth: body_box.depth,
         content: BoxContent::Overline {
             body: Box::new(body_box),
-            rule_thickness: rule,
+            rule_thickness: rule.thickness,
+            offset: rule.line_center_offset,
         },
         color: options.color,
     }
@@ -3615,19 +4205,17 @@ fn layout_overline(body: &ParseNode, options: &LayoutOptions) -> LayoutBox {
 
 fn layout_underline(body: &ParseNode, options: &LayoutOptions) -> LayoutBox {
     let body_box = layout_node(body, options);
-    let metrics = options.metrics();
-    let rule = metrics.default_rule_thickness;
-    let offset = 4.0 * rule;
+    let rule = RuleGeometry::underline(options);
 
-    let depth = body_box.depth + offset + 0.5 * rule;
+    let depth = body_box.depth + rule.total_extent;
     LayoutBox {
         width: body_box.width,
         height: body_box.height,
         depth,
         content: BoxContent::Underline {
             body: Box::new(body_box),
-            rule_thickness: rule,
-            offset,
+            rule_thickness: rule.thickness,
+            offset: rule.line_center_offset,
         },
         color: options.color,
     }
@@ -3636,14 +4224,9 @@ fn layout_underline(body: &ParseNode, options: &LayoutOptions) -> LayoutBox {
 /// `\href` / `\url`: link color on the glyphs and an underline in the same color (KaTeX-style).
 fn layout_href(body: &[ParseNode], options: &LayoutOptions) -> LayoutBox {
     let link_color = Color::from_name("blue").unwrap_or_else(|| Color::rgb(0.0, 0.0, 1.0));
-    // Slight tracking matches KaTeX/browser monospace link width in golden PNGs.
-    let body_opts = options.with_color(link_color).with_inter_glyph_kern(0.05);
+    let body_opts = options.with_color(link_color);
     let body_box = layout_expression(body, &body_opts, true);
-    if box_contains_font(&body_box, FontId::TypewriterRegular) {
-        layout_link_underline_laid_out(body_box, options, link_color)
-    } else {
-        layout_underline_laid_out(body_box, options, link_color)
-    }
+    layout_link_underline_laid_out(body_box, options, link_color)
 }
 
 /// Same geometry as [`layout_underline`], but for an already computed inner box.
@@ -3677,43 +4260,58 @@ fn layout_underline_laid_out_with_rule(
     }
 }
 
-fn box_contains_font(lbox: &LayoutBox, font_id: FontId) -> bool {
-    match &lbox.content {
-        BoxContent::Glyph { font_id: fid, .. } => *fid == font_id,
-        BoxContent::HBox(children) => children
-            .iter()
-            .any(|child| box_contains_font(child, font_id)),
-        BoxContent::Scaled { body, .. } | BoxContent::RaiseBox { body, .. } => {
-            box_contains_font(body, font_id)
-        }
-        _ => false,
-    }
-}
-
 fn link_underline_skip_cuts(lbox: &LayoutBox, x: f64, scale: f64, cuts: &mut Vec<(f64, f64)>) {
-    match &lbox.content {
-        BoxContent::HBox(children) => {
-            let mut cur_x = x;
-            for child in children {
-                link_underline_skip_cuts(child, cur_x, scale, cuts);
-                cur_x += child.width * scale;
+    let mut pending = vec![(lbox, x, scale)];
+    while let Some((current, current_x, current_scale)) = pending.pop() {
+        match &current.content {
+            BoxContent::HBox(children) => {
+                let mut child_positions = Vec::with_capacity(children.len());
+                let mut child_x = current_x;
+                for child in children {
+                    child_positions.push((child, child_x, current_scale));
+                    child_x += child.width * current_scale;
+                }
+                pending.extend(child_positions.into_iter().rev());
             }
-        }
-        BoxContent::Glyph { char_code, .. } => {
-            if let Some(ch) = char::from_u32(*char_code) {
-                if matches!(ch, 'g' | 'j' | 'p' | 'q' | 'y') {
-                    let pad = (0.04 * scale).min(lbox.width * scale / 3.0);
-                    cuts.push((x + pad, x + lbox.width * scale - pad));
+            BoxContent::Glyph { char_code, .. } => {
+                if let Some(ch) = char::from_u32(*char_code) {
+                    if matches!(ch, 'g' | 'j' | 'p' | 'q' | 'y') {
+                        let pad = (0.04 * current_scale).min(current.width * current_scale / 3.0);
+                        cuts.push((
+                            current_x + pad,
+                            current_x + current.width * current_scale - pad,
+                        ));
+                    }
                 }
             }
+            BoxContent::GlyphRun { glyphs } => {
+                for (index, glyph) in glyphs.iter().enumerate() {
+                    let Some(ch) = char::from_u32(glyph.char_code) else {
+                        continue;
+                    };
+                    if !matches!(ch, 'g' | 'j' | 'p' | 'q' | 'y') {
+                        continue;
+                    }
+                    let glyph_right = glyphs
+                        .get(index + 1)
+                        .map(|next| next.x)
+                        .unwrap_or(current.width);
+                    let glyph_width = (glyph_right - glyph.x).max(0.0);
+                    let pad = (0.04 * current_scale).min(glyph_width * current_scale / 3.0);
+                    cuts.push((
+                        current_x + glyph.x * current_scale + pad,
+                        current_x + glyph_right * current_scale - pad,
+                    ));
+                }
+            }
+            BoxContent::Scaled { body, child_scale } => {
+                pending.push((body, current_x, current_scale * child_scale));
+            }
+            BoxContent::RaiseBox { body, .. } => {
+                pending.push((body, current_x, current_scale));
+            }
+            _ => {}
         }
-        BoxContent::Scaled { body, child_scale } => {
-            link_underline_skip_cuts(body, x, scale * child_scale, cuts);
-        }
-        BoxContent::RaiseBox { body, .. } => {
-            link_underline_skip_cuts(body, x, scale, cuts);
-        }
-        _ => {}
     }
 }
 
@@ -3752,14 +4350,18 @@ fn layout_link_underline_laid_out(
 ) -> LayoutBox {
     let metrics = options.metrics();
     let rule = metrics.default_rule_thickness;
-    let offset = 2.5 * rule;
+    // Browser text decoration uses the font underline position measured from
+    // the baseline. Keep it out of a descender's ink box when the run is
+    // deeper than that nominal position.
+    let center_from_baseline = body_box.depth.max(3.125 * rule);
+    let offset = center_from_baseline - body_box.depth;
     let segments = link_underline_segments(&body_box);
     if segments.len() <= 1 {
         return layout_underline_laid_out_with_rule(body_box, rule, offset, color);
     }
 
     let height = body_box.height;
-    let depth = body_box.depth + offset + 0.5 * rule;
+    let depth = body_box.depth.max(center_from_baseline + 0.5 * rule);
     let rule_y = height + body_box.depth + offset;
     let width = body_box.width;
     LayoutBox {
@@ -3850,64 +4452,68 @@ fn measurement_to_em(m: &ratex_parser::parse_node::Measurement, options: &Layout
 
 /// Determine the math class of a ParseNode for spacing purposes.
 fn node_math_class(node: &ParseNode) -> Option<MathClass> {
-    match node {
-        ParseNode::MathOrd { .. } | ParseNode::TextOrd { .. } => Some(MathClass::Ord),
-        ParseNode::Atom { family, .. } => Some(family_to_math_class(*family)),
-        ParseNode::OpToken { .. } | ParseNode::Op { .. } | ParseNode::OperatorName { .. } => {
-            Some(MathClass::Op)
-        }
-        ParseNode::OrdGroup { .. } => Some(MathClass::Ord),
-        // KaTeX genfrac.js: with delimiters (e.g. \binom) → mord; without (e.g. \frac) → minner.
-        ParseNode::GenFrac {
-            left_delim,
-            right_delim,
-            ..
-        } => {
-            let has_delim = left_delim
-                .as_ref()
-                .is_some_and(|d| !d.is_empty() && d != ".")
-                || right_delim
+    // SupSub and HTML wrappers can form input-controlled chains.  Walk them
+    // explicitly so spacing classification does not consume one call frame per node.
+    let mut pending = vec![node];
+    while let Some(current) = pending.pop() {
+        match current {
+            ParseNode::MathOrd { .. } | ParseNode::TextOrd { .. } => {
+                return Some(MathClass::Ord);
+            }
+            ParseNode::Atom { family, .. } => return Some(family_to_math_class(*family)),
+            ParseNode::OpToken { .. } | ParseNode::Op { .. } | ParseNode::OperatorName { .. } => {
+                return Some(MathClass::Op);
+            }
+            ParseNode::OrdGroup { .. } => return Some(MathClass::Ord),
+            // KaTeX genfrac.js: with delimiters (e.g. \binom) → mord; without
+            // (e.g. \frac) → minner.
+            ParseNode::GenFrac {
+                left_delim,
+                right_delim,
+                ..
+            } => {
+                let has_delim = left_delim
                     .as_ref()
-                    .is_some_and(|d| !d.is_empty() && d != ".");
-            if has_delim {
-                Some(MathClass::Ord)
-            } else {
-                Some(MathClass::Inner)
+                    .is_some_and(|d| !d.is_empty() && d != ".")
+                    || right_delim
+                        .as_ref()
+                        .is_some_and(|d| !d.is_empty() && d != ".");
+                return Some(if has_delim {
+                    MathClass::Ord
+                } else {
+                    MathClass::Inner
+                });
             }
-        }
-        ParseNode::Sqrt { .. } => Some(MathClass::Ord),
-        ParseNode::SupSub { base, .. } => base.as_ref().and_then(|b| node_math_class(b)),
-        ParseNode::MClass { mclass, .. } => Some(mclass_str_to_math_class(mclass)),
-        ParseNode::SpacingNode { .. } => None,
-        ParseNode::Kern { .. } => None,
-        ParseNode::HtmlMathMl { html, .. } => {
-            // Derive math class from the first meaningful child in the HTML branch
-            for child in html {
-                if let Some(cls) = node_math_class(child) {
-                    return Some(cls);
+            ParseNode::Sqrt { .. } => return Some(MathClass::Ord),
+            ParseNode::SupSub { base, .. } => {
+                if let Some(base) = base {
+                    pending.push(base);
                 }
             }
-            None
-        }
-        ParseNode::Html { body, .. } => {
-            for child in body {
-                if let Some(cls) = node_math_class(child) {
-                    return Some(cls);
-                }
+            ParseNode::MClass { mclass, .. } => {
+                return Some(mclass_str_to_math_class(mclass));
             }
-            None
+            ParseNode::SpacingNode { .. } | ParseNode::Kern { .. } | ParseNode::Lap { .. } => {}
+            ParseNode::HtmlMathMl { html, .. } => {
+                pending.extend(html.iter().rev());
+            }
+            ParseNode::Html { body, .. } => {
+                pending.extend(body.iter().rev());
+            }
+            ParseNode::LeftRight { .. } => return Some(MathClass::Inner),
+            ParseNode::AccentToken { .. } => return Some(MathClass::Ord),
+            // \xrightarrow and CD arrows are relations for TeX spacing.
+            ParseNode::XArrow { .. } | ParseNode::CdArrow { .. } => {
+                return Some(MathClass::Rel);
+            }
+            ParseNode::DelimSizing { mclass, .. } => {
+                return Some(mclass_str_to_math_class(mclass));
+            }
+            ParseNode::Middle { .. } => return Some(MathClass::Ord),
+            _ => return Some(MathClass::Ord),
         }
-        ParseNode::Lap { .. } => None,
-        ParseNode::LeftRight { .. } => Some(MathClass::Inner),
-        ParseNode::AccentToken { .. } => Some(MathClass::Ord),
-        // \xrightarrow etc. are mathrel in TeX/KaTeX; without this they collapse to Ord–Ord (no kern).
-        ParseNode::XArrow { .. } => Some(MathClass::Rel),
-        // CD arrows are structural; treat as Rel for spacing.
-        ParseNode::CdArrow { .. } => Some(MathClass::Rel),
-        ParseNode::DelimSizing { mclass, .. } => Some(mclass_str_to_math_class(mclass)),
-        ParseNode::Middle { .. } => Some(MathClass::Ord),
-        _ => Some(MathClass::Ord),
     }
+    None
 }
 
 fn mclass_str_to_math_class(mclass: &str) -> MathClass {
@@ -3928,12 +4534,15 @@ fn mclass_str_to_math_class(mclass: &str) -> MathClass {
 /// KaTeX `getBaseElem` (`utils.js`): unwrap `ordgroup` / `color` with a single child, and `font`.
 /// Used for TeX "character box" checks in superscript Rule 18a (`supsub.js`).
 fn get_base_elem(node: &ParseNode) -> &ParseNode {
-    match node {
-        ParseNode::OrdGroup { body, .. } if body.len() == 1 => get_base_elem(&body[0]),
-        ParseNode::Color { body, .. } if body.len() == 1 => get_base_elem(&body[0]),
-        ParseNode::Html { body, .. } if body.len() == 1 => get_base_elem(&body[0]),
-        ParseNode::Font { body, .. } => get_base_elem(body),
-        _ => node,
+    let mut current = node;
+    loop {
+        current = match current {
+            ParseNode::OrdGroup { body, .. } if body.len() == 1 => &body[0],
+            ParseNode::Color { body, .. } if body.len() == 1 => &body[0],
+            ParseNode::Html { body, .. } if body.len() == 1 => &body[0],
+            ParseNode::Font { body, .. } => body,
+            _ => return current,
+        };
     }
 }
 
@@ -3969,7 +4578,6 @@ fn layout_horiz_brace(
     options: &LayoutOptions,
 ) -> LayoutBox {
     let body_box = layout_node(base, options);
-    let w = body_box.width.max(0.5);
 
     let is_bracket = func_label.trim_start_matches('\\').ends_with("bracket");
 
@@ -3985,6 +4593,9 @@ fn layout_horiz_brace(
     } else {
         "underbrace"
     };
+    let w = body_box
+        .width
+        .max(crate::katex_svg::katex_stretchy_min_width_em(stretch_key).unwrap_or(0.5));
 
     let (raw_commands, brace_h, brace_fill) =
         match crate::katex_svg::katex_stretchy_path(stretch_key, w) {
@@ -4014,34 +4625,13 @@ fn layout_horiz_brace(
         color: options.color,
     };
 
-    let gap = 0.1;
-    let (height, depth) = if is_over {
-        (body_box.height + brace_h + gap, body_box.depth)
-    } else {
-        (body_box.height, body_box.depth + brace_h + gap)
-    };
-
-    let clearance = if is_over {
-        height - brace_h
-    } else {
-        body_box.height + body_box.depth + gap
-    };
-    let total_w = body_box.width;
-
-    LayoutBox {
-        width: total_w,
-        height,
-        depth,
-        content: BoxContent::Accent {
-            base: Box::new(body_box),
-            accent: Box::new(brace_box),
-            clearance,
-            skew: 0.0,
-            is_below: !is_over,
-            under_gap_em: 0.0,
-        },
-        color: options.color,
-    }
+    compose_stretchy(
+        padded_to_width(body_box, w),
+        brace_box,
+        StretchySpec::horizontal_brace(is_over, options),
+        0.0,
+        options.color,
+    )
 }
 
 // ============================================================================
@@ -4750,6 +5340,71 @@ fn cd_wrap_hpad(inner: LayoutBox, pad_l: f64, pad_r: f64, color: Color) -> Layou
     }
 }
 
+fn cd_shift_label_ink_left(label: LayoutBox, color: Color) -> LayoutBox {
+    const SHIFT: f64 = -0.1;
+    let width = label.width;
+    let height = label.height;
+    let depth = label.depth;
+    LayoutBox {
+        width,
+        height,
+        depth,
+        content: BoxContent::HBox(vec![
+            LayoutBox::new_kern(SHIFT),
+            label,
+            LayoutBox::new_kern(-SHIFT),
+        ]),
+        color,
+    }
+}
+
+fn thin_cd_arrow_shaft(commands: Vec<PathCommand>) -> Vec<PathCommand> {
+    let thin_y = |y: f64| {
+        if y.abs() <= 0.021 {
+            y * 0.5
+        } else {
+            y
+        }
+    };
+    commands
+        .into_iter()
+        .map(|command| match command {
+            PathCommand::MoveTo { x, y } => PathCommand::MoveTo { x, y: thin_y(y) },
+            PathCommand::LineTo { x, y } => PathCommand::LineTo { x, y: thin_y(y) },
+            PathCommand::CubicTo {
+                x1,
+                y1,
+                x2,
+                y2,
+                x,
+                y,
+            } => PathCommand::CubicTo {
+                x1,
+                y1: thin_y(y1),
+                x2,
+                y2: thin_y(y2),
+                x,
+                y: thin_y(y),
+            },
+            PathCommand::QuadTo { x1, y1, x, y } => PathCommand::QuadTo {
+                x1,
+                y1: thin_y(y1),
+                x,
+                y: thin_y(y),
+            },
+            PathCommand::Close => PathCommand::Close,
+        })
+        .collect()
+}
+
+fn cd_label_has_ink(label: Option<&ParseNode>) -> bool {
+    match label {
+        None => false,
+        Some(ParseNode::OrdGroup { body, .. }) => !body.is_empty(),
+        Some(_) => true,
+    }
+}
+
 /// Wrap a side label for a vertical CD arrow so it is vertically centered on the shaft.
 ///
 /// The resulting box reports `height = box_h, depth = box_d` (same as the shaft) so it
@@ -4798,20 +5453,112 @@ fn cd_side_label_scaled(body: &ParseNode, options: &LayoutOptions) -> LayoutBox 
     }
 }
 
-/// Stretch ↑ / ↓ to span the CD arrow row (`total_height` = height + depth in em).
-///
-/// Reuses the same filled KaTeX stretchy path as horizontal `\cdrightarrow` (see
-/// `katex_svg::katex_cd_vert_arrow_from_rightarrow`) so the head/shaft match the horizontal CD
-/// arrows; `make_stretchy_delim` does not stack ↑/↓ to arbitrary heights.
-fn cd_stretch_vert_arrow_box(total_height: f64, down: bool, options: &LayoutOptions) -> LayoutBox {
+/// KaTeX `makeStackedDelim` geometry for the `\Big\uparrow` / `\Big\downarrow`
+/// used by `{CD}`. The arrow end and U+23D0 repeat come from Size1-Regular;
+/// the middle shaft is a filled 0.043em strip with 0.008em overlaps.
+fn cd_stacked_vert_arrow_box(
+    requested_height: f64,
+    down: bool,
+    options: &LayoutOptions,
+) -> LayoutBox {
+    const ARROW_UP: u32 = 0x2191;
+    const ARROW_DOWN: u32 = 0x2193;
+    const REPEAT: u32 = 0x23d0;
+    const LAP: f64 = 0.008;
+
+    let glyph_box = |char_code: u32| {
+        let metrics = get_char_metrics(FontId::Size1Regular, char_code)
+            .expect("KaTeX Size1 stacked-arrow glyph");
+        LayoutBox {
+            width: metrics.width,
+            height: metrics.height,
+            depth: metrics.depth,
+            content: BoxContent::Glyph {
+                font_id: FontId::Size1Regular,
+                char_code,
+            },
+            color: options.color,
+        }
+    };
+
+    let arrow = glyph_box(if down { ARROW_DOWN } else { ARROW_UP });
+    let repeat = glyph_box(REPEAT);
+    let top = if down { repeat.clone() } else { arrow.clone() };
+    let bottom = if down { arrow } else { repeat.clone() };
+    let top_total = top.height + top.depth;
+    let bottom_total = bottom.height + bottom.depth;
+    let repeat_total = repeat.height + repeat.depth;
+    let minimum = top_total + bottom_total;
+    let repeat_count = ((requested_height.max(minimum) - minimum) / repeat_total)
+        .ceil()
+        .max(0.0) as usize;
+    let real_height = minimum + repeat_count as f64 * repeat_total;
+    let inner_height = real_height - minimum + 2.0 * LAP;
+    let width = top.width.max(bottom.width).max(repeat.width);
+
+    let shaft = LayoutBox {
+        width: repeat.width,
+        height: inner_height,
+        depth: 0.0,
+        content: BoxContent::SvgPath {
+            commands: vec![
+                PathCommand::MoveTo {
+                    x: 0.312,
+                    y: -inner_height,
+                },
+                PathCommand::LineTo {
+                    x: 0.355,
+                    y: -inner_height,
+                },
+                PathCommand::LineTo { x: 0.355, y: 0.0 },
+                PathCommand::LineTo { x: 0.312, y: 0.0 },
+                PathCommand::Close,
+            ],
+            fill: true,
+        },
+        color: options.color,
+    };
+    // Size1's stacked-arrow pieces have a right side-bearing that does not
+    // participate in the DOM centering box. Compensate so the visible shaft,
+    // arrowhead, and object-column center share one x coordinate.
+    const VISIBLE_CENTER_ADJUST: f64 = -0.0875;
+    let centered = |box_: LayoutBox| VBoxChild {
+        shift: (width - box_.width) / 2.0 + VISIBLE_CENTER_ADJUST,
+        kind: VBoxChildKind::Box(Box::new(box_)),
+    };
+    let children = vec![
+        centered(top),
+        VBoxChild {
+            kind: VBoxChildKind::Kern(-LAP),
+            shift: 0.0,
+        },
+        centered(shaft),
+        VBoxChild {
+            kind: VBoxChildKind::Kern(-LAP),
+            shift: 0.0,
+        },
+        centered(bottom),
+    ];
+    let depth = (real_height / 2.0 - options.metrics().axis_height).max(0.0);
+
+    LayoutBox {
+        width,
+        height: real_height - depth,
+        depth,
+        content: BoxContent::VBox(children),
+        color: options.color,
+    }
+}
+
+fn cd_rotated_vert_arrow_box(total_height: f64, down: bool, options: &LayoutOptions) -> LayoutBox {
     let axis = options.metrics().axis_height;
     let depth = (total_height / 2.0 - axis).max(0.0);
     let height = total_height - depth;
-    if let Some((commands, w)) =
+    if let Some((commands, width)) =
         crate::katex_svg::katex_cd_vert_arrow_from_rightarrow(down, total_height, axis)
     {
-        return LayoutBox {
-            width: w,
+        LayoutBox {
+            width,
             height,
             depth,
             content: BoxContent::SvgPath {
@@ -4819,13 +5566,13 @@ fn cd_stretch_vert_arrow_box(total_height: f64, down: bool, options: &LayoutOpti
                 fill: true,
             },
             color: options.color,
-        };
-    }
-    // Fallback (should not happen): `\cdrightarrow` is always in the stretchy table.
-    if down {
-        make_stretchy_delim("\\downarrow", SIZE_TO_MAX_HEIGHT[2], options)
+        }
     } else {
-        make_stretchy_delim("\\uparrow", SIZE_TO_MAX_HEIGHT[2], options)
+        make_stretchy_delim(
+            if down { "\\downarrow" } else { "\\uparrow" },
+            total_height,
+            options,
+        )
     }
 }
 
@@ -4842,23 +5589,17 @@ fn cd_stretch_vert_arrow_box(total_height: f64, down: bool, options: &LayoutOpti
 /// `target_col_width`: when `> 0`, center the cell in this column width (horizontal: side kerns;
 /// vertical: kerns around shaft + labels).
 ///
-/// `target_depth` (vertical only): depth portion of `target_size` when `> 0`, so that
-/// `box_h = target_size - target_depth` and `box_d = target_depth`.
 fn layout_cd_arrow(
     direction: &str,
     label_above: Option<&ParseNode>,
     label_below: Option<&ParseNode>,
     target_size: f64,
     target_col_width: f64,
-    _target_depth: f64,
+    compact_labels_enabled: bool,
     options: &LayoutOptions,
 ) -> LayoutBox {
     let metrics = options.metrics();
     let axis = metrics.axis_height;
-
-    // Vertical CD: kern between side label and shaft (KaTeX `cd-label-*` sits tight; 0.25em
-    // widens object columns vs `tests/golden/fixtures` CD).
-    const CD_VERT_SIDE_KERN_EM: f64 = 0.11;
 
     match direction {
         "right" | "left" | "horiz_eq" => {
@@ -4870,7 +5611,18 @@ fn layout_cd_arrow(
             let sup_ratio = sup_style.size_multiplier() / options.style.size_multiplier();
             let sub_ratio = sub_style.size_multiplier() / options.style.size_multiplier();
 
-            let above_box = label_above.map(|n| layout_node(n, &sup_opts));
+            let above_has_ink = cd_label_has_ink(label_above);
+            let below_has_ink = cd_label_has_ink(label_below);
+            let use_compact_cd_labels =
+                compact_labels_enabled && direction != "horiz_eq" && !below_has_ink;
+            let above_box = label_above.map(|n| {
+                let box_ = layout_node(n, &sup_opts);
+                if use_compact_cd_labels && above_has_ink {
+                    cd_shift_label_ink_left(box_, options.color)
+                } else {
+                    box_
+                }
+            });
             let below_box = label_below.map(|n| layout_node(n, &sub_opts));
 
             let above_w = above_box
@@ -4957,6 +5709,11 @@ fn layout_cd_arrow(
                         (cmds, arrow_h, false)
                     }
                 };
+            let commands = if matches!(direction, "right" | "left") && use_compact_cd_labels {
+                thin_cd_arrow_shaft(commands)
+            } else {
+                commands
+            };
 
             // Arrow box centered at y=0 (same as layout_xarrow)
             let arrow_half = actual_arrow_h / 2.0;
@@ -4972,7 +5729,15 @@ fn layout_cd_arrow(
             };
 
             // Total height/depth for OpLimits (mirrors layout_xarrow / KaTeX arrow.ts)
-            let gap = 0.111;
+            // The CD label span already carries script-style line height; using
+            // the generic x-arrow 2mu kern leaves a visible gap that KaTeX's
+            // `.cd-arrow-pad` box does not have. Keep only one rule-thickness
+            // of clearance between the label ink and shaft.
+            let (sup_gap, sub_gap) = if use_compact_cd_labels {
+                (-options.metrics().default_rule_thickness, 0.025)
+            } else {
+                (0.111, 0.111)
+            };
             let sup_h = above_box
                 .as_ref()
                 .map(|b| b.height * sup_ratio)
@@ -4989,7 +5754,7 @@ fn layout_cd_arrow(
             } else {
                 0.0
             };
-            let height = axis + arrow_half + gap + sup_h + sup_d_contrib;
+            let height = axis + arrow_half + sup_gap + sup_h + sup_d_contrib;
             let sub_h_raw = below_box
                 .as_ref()
                 .map(|b| b.height * sub_ratio)
@@ -4999,7 +5764,7 @@ fn layout_cd_arrow(
                 .map(|b| b.depth * sub_ratio)
                 .unwrap_or(0.0);
             let depth = if below_box.is_some() {
-                (arrow_half - axis).max(0.0) + gap + sub_h_raw + sub_d_raw
+                (arrow_half - axis).max(0.0) + sub_gap + sub_h_raw + sub_d_raw
             } else {
                 (arrow_half - axis).max(0.0)
             };
@@ -5013,8 +5778,8 @@ fn layout_cd_arrow(
                     sup: above_box.map(Box::new),
                     sub: below_box.map(Box::new),
                     base_shift: -axis,
-                    sup_kern: gap,
-                    sub_kern: gap,
+                    sup_kern: sup_gap,
+                    sub_kern: sub_gap,
                     slant: 0.0,
                     sup_scale: sup_ratio,
                     sub_scale: sub_ratio,
@@ -5039,20 +5804,30 @@ fn layout_cd_arrow(
             // Pass 1: \Big (~1.8em). Pass 2: stretch ↑/↓ / ‖ to the full arrow-row span (em).
             let big_total = SIZE_TO_MAX_HEIGHT[2]; // 1.8em
 
+            let has_side_label = cd_label_has_ink(label_above) || cd_label_has_ink(label_below);
             let shaft_box = match direction {
-                "vert_eq" if target_size > 0.0 => {
-                    make_vert_delim_box(target_size.max(big_total), true, false, options)
-                }
+                "vert_eq" if target_size > 0.0 => make_vert_delim_box(
+                    target_size.max(big_total),
+                    true,
+                    VertDelimKind::Stretchy,
+                    options,
+                ),
                 "vert_eq" => make_stretchy_delim("\\Vert", big_total, options),
+                "down" if has_side_label => {
+                    cd_rotated_vert_arrow_box(target_size.max(big_total), true, options)
+                }
+                "up" if has_side_label => {
+                    cd_rotated_vert_arrow_box(target_size.max(big_total), false, options)
+                }
                 "down" if target_size > 0.0 => {
-                    cd_stretch_vert_arrow_box(target_size.max(1.0), true, options)
+                    cd_stacked_vert_arrow_box(target_size.max(1.0), true, options)
                 }
                 "up" if target_size > 0.0 => {
-                    cd_stretch_vert_arrow_box(target_size.max(1.0), false, options)
+                    cd_stacked_vert_arrow_box(target_size.max(1.0), false, options)
                 }
-                "down" => cd_stretch_vert_arrow_box(big_total, true, options),
-                "up" => cd_stretch_vert_arrow_box(big_total, false, options),
-                _ => cd_stretch_vert_arrow_box(big_total, true, options),
+                "down" => cd_stacked_vert_arrow_box(big_total, true, options),
+                "up" => cd_stacked_vert_arrow_box(big_total, false, options),
+                _ => cd_stacked_vert_arrow_box(big_total, true, options),
             };
             let box_h = shaft_box.height;
             let box_d = shaft_box.depth;
@@ -5077,47 +5852,43 @@ fn layout_cd_arrow(
                 )
             });
 
-            let left_w = left_box.as_ref().map(|b| b.width).unwrap_or(0.0);
-            let right_w = right_box.as_ref().map(|b| b.width).unwrap_or(0.0);
-            let left_part = left_w
-                + if left_w > 0.0 {
-                    CD_VERT_SIDE_KERN_EM
-                } else {
-                    0.0
-                };
-            let right_part = (if right_w > 0.0 {
-                CD_VERT_SIDE_KERN_EM
+            let left_w = left_box.as_ref().map(|box_| box_.width).unwrap_or(0.0);
+            let right_w = right_box.as_ref().map(|box_| box_.width).unwrap_or(0.0);
+            let has_side_labels = left_w > 0.0 || right_w > 0.0;
+            let (total_w, children) = if has_side_labels {
+                // Side-label overflow affects the raster canvas in RaTeX. Keep
+                // it explicit for now while preserving the legacy label cases;
+                // unlabeled shafts use the centered object-column model below.
+                const SIDE_KERN: f64 = 0.11;
+                let left_part = left_w + if left_w > 0.0 { SIDE_KERN } else { 0.0 };
+                let right_part = if right_w > 0.0 { SIDE_KERN } else { 0.0 } + right_w;
+                let inner_w = left_part + shaft_w + right_part;
+                let total_w = target_col_width.max(inner_w);
+                let outer_pad = (total_w - inner_w) / 2.0;
+                let mut children = vec![LayoutBox::new_kern(outer_pad)];
+                if let Some(lb) = left_box {
+                    children.push(lb);
+                    children.push(LayoutBox::new_kern(SIDE_KERN));
+                }
+                children.push(shaft_box);
+                if let Some(rb) = right_box {
+                    children.push(LayoutBox::new_kern(SIDE_KERN));
+                    children.push(rb);
+                }
+                children.push(LayoutBox::new_kern(total_w - inner_w - outer_pad));
+                (total_w, children)
             } else {
-                0.0
-            }) + right_w;
-            let inner_w = left_part + shaft_w + right_part;
-
-            // Center shaft within the column width (pass 2) using side kerns.
-            let (kern_left, kern_right, total_w) = if target_col_width > inner_w {
-                let extra = target_col_width - inner_w;
-                let kl = extra / 2.0;
-                let kr = extra - kl;
-                (kl, kr, target_col_width)
-            } else {
-                (0.0, 0.0, inner_w)
+                let total_w = target_col_width.max(shaft_w);
+                let pad = (total_w - shaft_w) / 2.0;
+                (
+                    total_w,
+                    vec![
+                        LayoutBox::new_kern(pad),
+                        shaft_box,
+                        LayoutBox::new_kern(total_w - shaft_w - pad),
+                    ],
+                )
             };
-
-            let mut children: Vec<LayoutBox> = Vec::new();
-            if kern_left > 0.0 {
-                children.push(LayoutBox::new_kern(kern_left));
-            }
-            if let Some(lb) = left_box {
-                children.push(lb);
-                children.push(LayoutBox::new_kern(CD_VERT_SIDE_KERN_EM));
-            }
-            children.push(shaft_box);
-            if let Some(rb) = right_box {
-                children.push(LayoutBox::new_kern(CD_VERT_SIDE_KERN_EM));
-                children.push(rb);
-            }
-            if kern_right > 0.0 {
-                children.push(LayoutBox::new_kern(kern_right));
-            }
 
             LayoutBox {
                 width: total_w,
@@ -5150,20 +5921,45 @@ fn layout_cd(body: &[Vec<ParseNode>], options: &LayoutOptions) -> LayoutBox {
     if num_cols == 0 {
         return LayoutBox::new_empty();
     }
+    let has_vertical_side_labels = body.iter().flatten().any(|cell| {
+        matches!(
+            cell,
+            ParseNode::CdArrow {
+                direction,
+                label_above,
+                label_below,
+                ..
+            } if matches!(direction.as_str(), "down" | "up")
+                && (cd_label_has_ink(label_above.as_deref())
+                    || cd_label_has_ink(label_below.as_deref()))
+        )
+    });
+    let has_horizontal_ink_label = body.iter().flatten().any(|cell| {
+        matches!(
+            cell,
+            ParseNode::CdArrow {
+                direction,
+                label_above,
+                label_below,
+                ..
+            } if matches!(direction.as_str(), "right" | "left")
+                && (cd_label_has_ink(label_above.as_deref())
+                    || cd_label_has_ink(label_below.as_deref()))
+        )
+    });
+    let compact_labels_enabled =
+        !(has_vertical_side_labels || num_cols > 3 && has_horizontal_ink_label);
 
     // `\jot` (3pt): added to every row depth below; include in vertical-arrow stretch span.
     let jot = 3.0 * pt;
 
     // ── Pass 1: layout all cells at natural size ────────────────────────────
     let mut cell_boxes: Vec<Vec<LayoutBox>> = Vec::with_capacity(num_rows);
-    let mut col_widths = vec![0.0_f64; num_cols];
-    let mut row_heights = vec![arstrut_h; num_rows];
-    let mut row_depths = vec![arstrut_d; num_rows];
 
-    for (r, row) in body.iter().enumerate() {
+    for row in body {
         let mut row_boxes: Vec<LayoutBox> = Vec::with_capacity(num_cols);
 
-        for (c, cell) in row.iter().enumerate() {
+        for cell in row {
             let cbox = match cell {
                 ParseNode::CdArrow {
                     direction,
@@ -5177,7 +5973,7 @@ fn layout_cd(body: &[Vec<ParseNode>], options: &LayoutOptions) -> LayoutBox {
                         label_below.as_deref(),
                         0.0, // natural size in pass 1
                         0.0, // natural column width
-                        0.0, // natural depth split
+                        compact_labels_enabled,
                         options,
                     )
                 }
@@ -5190,9 +5986,6 @@ fn layout_cd(body: &[Vec<ParseNode>], options: &LayoutOptions) -> LayoutBox {
                 other => layout_node(other, options),
             };
 
-            row_heights[r] = row_heights[r].max(cbox.height);
-            row_depths[r] = row_depths[r].max(cbox.depth);
-            col_widths[c] = col_widths[c].max(cbox.width);
             row_boxes.push(cbox);
         }
 
@@ -5203,25 +5996,16 @@ fn layout_cd(body: &[Vec<ParseNode>], options: &LayoutOptions) -> LayoutBox {
         cell_boxes.push(row_boxes);
     }
 
+    let GridMetrics {
+        mut col_widths,
+        row_heights,
+        mut row_depths,
+    } = GridMetrics::measure(&cell_boxes, num_cols, arstrut_h, arstrut_d);
+
     // Column targets after pass 1 (max natural width per column). Horizontal shafts use per-cell
     // `target_size`, not this max — same as KaTeX: minCDarrowwidth is min-width on the glyph span,
     // not “stretch every row to column max”.
     let col_target_w: Vec<f64> = col_widths.clone();
-
-    #[cfg(debug_assertions)]
-    {
-        eprintln!("[CD] pass1 col_widths={col_widths:?} row_heights={row_heights:?} row_depths={row_depths:?}");
-        for (r, row) in cell_boxes.iter().enumerate() {
-            for (c, b) in row.iter().enumerate() {
-                if b.width > 0.0 {
-                    eprintln!(
-                        "[CD]   cell[{r}][{c}] w={:.4} h={:.4} d={:.4}",
-                        b.width, b.height, b.depth
-                    );
-                }
-            }
-        }
-    }
 
     // ── Pass 2: re-layout arrow cells with target dimensions ───────────────
     for (r, row) in body.iter().enumerate() {
@@ -5242,7 +6026,7 @@ fn layout_cd(body: &[Vec<ParseNode>], options: &LayoutOptions) -> LayoutBox {
                         label_below.as_deref(),
                         cell_boxes[r][c].width,
                         col_target_w[c],
-                        0.0,
+                        compact_labels_enabled,
                         options,
                     );
                     let w = b.width;
@@ -5258,7 +6042,7 @@ fn layout_cd(body: &[Vec<ParseNode>], options: &LayoutOptions) -> LayoutBox {
                         label_below.as_deref(),
                         v_span,
                         col_widths[c],
-                        0.0,
+                        compact_labels_enabled,
                         options,
                     );
                     let w = b.width;
@@ -5272,14 +6056,9 @@ fn layout_cd(body: &[Vec<ParseNode>], options: &LayoutOptions) -> LayoutBox {
         }
     }
 
-    #[cfg(debug_assertions)]
-    {
-        eprintln!("[CD] pass2 col_widths={col_widths:?} row_heights={row_heights:?} row_depths={row_depths:?}");
-    }
-
     // KaTeX `environments/cd.js` sets `addJot: true` for CD; `array.js` adds `\jot` (3pt) to each
     // row's depth (same as `layout_array` when `add_jot` is set).
-    for rd in &mut row_depths {
+    for rd in row_depths.iter_mut().take(num_rows.saturating_sub(1)) {
         *rd += jot;
     }
 
@@ -5287,7 +6066,7 @@ fn layout_cd(body: &[Vec<ParseNode>], options: &LayoutOptions) -> LayoutBox {
     // KaTeX CD uses `pregap: 0.25, postgap: 0.25` per column (cd.ts line 216-217),
     // giving 0.5em between adjacent columns.  `hskipBeforeAndAfter` is unset (false),
     // so no outer padding.
-    let col_gap = 0.5;
+    let col_gaps = vec![0.5; num_cols.saturating_sub(1)];
 
     // Column alignment: objects are centered, arrows are centered
     let col_aligns: Vec<u8> = (0..num_cols).map(|_| b'c').collect();
@@ -5295,21 +6074,15 @@ fn layout_cd(body: &[Vec<ParseNode>], options: &LayoutOptions) -> LayoutBox {
     // No vertical separators for CD
     let col_separators = vec![None; num_cols + 1];
 
-    let mut total_height = 0.0_f64;
-    let mut row_positions = Vec::with_capacity(num_rows);
-    for r in 0..num_rows {
-        total_height += row_heights[r];
-        row_positions.push(total_height);
-        total_height += row_depths[r];
+    let grid_dimensions = GridMetrics {
+        col_widths: col_widths.clone(),
+        row_heights: row_heights.clone(),
+        row_depths: row_depths.clone(),
     }
-
-    let offset = total_height / 2.0 + metrics.axis_height;
-    let height = offset;
-    let depth = total_height - offset;
-
-    // Total width: sum of col_widths + col_gap between each
-    let total_width =
-        col_widths.iter().sum::<f64>() + col_gap * (num_cols.saturating_sub(1)) as f64;
+    .dimensions(&col_gaps, metrics.axis_height, 0.0, 0.0);
+    let height = grid_dimensions.offset;
+    let depth = grid_dimensions.total_height - grid_dimensions.offset;
+    let total_width = grid_dimensions.width;
 
     // Build hlines_before_row (all empty for CD)
     let hlines_before_row: Vec<Vec<bool>> = (0..=num_rows).map(|_| vec![]).collect();
@@ -5324,9 +6097,10 @@ fn layout_cd(body: &[Vec<ParseNode>], options: &LayoutOptions) -> LayoutBox {
             col_aligns,
             row_heights,
             row_depths,
-            col_gap,
-            offset,
+            col_gaps: col_gaps.into_boxed_slice(),
+            offset: grid_dimensions.offset,
             content_x_offset: 0.0,
+            content_x_end_offset: 0.0,
             col_separators,
             hlines_before_row,
             rule_thickness: 0.04 * pt,
@@ -5790,6 +6564,485 @@ mod missing_glyph_width_em_tests {
     #[test]
     fn latin_without_metrics_stays_half_em() {
         assert_eq!(missing_glyph_width_em('z'), 0.5);
+    }
+}
+
+#[cfg(test)]
+mod vertical_delimiter_geometry_tests {
+    use super::*;
+
+    fn path_y_bounds(commands: &[PathCommand]) -> (f64, f64) {
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        let mut include = |y: f64| {
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        };
+        for command in commands {
+            match command {
+                PathCommand::MoveTo { y, .. } | PathCommand::LineTo { y, .. } => include(*y),
+                PathCommand::CubicTo { y1, y2, y, .. } => {
+                    include(*y1);
+                    include(*y2);
+                    include(*y);
+                }
+                PathCommand::QuadTo { y1, y, .. } => {
+                    include(*y1);
+                    include(*y);
+                }
+                PathCommand::Close => {}
+            }
+        }
+        (min_y, max_y)
+    }
+
+    #[test]
+    fn stacked_vertical_delimiters_use_exact_katex_repeat_counts() {
+        let options = LayoutOptions::default();
+        let piece = vert_repeat_piece_height(false);
+
+        for (requested, repeats) in [(1.2, 0.0), (1.8, 1.0), (2.4, 2.0), (3.0, 3.0)] {
+            let geometry = stacked_vert_geometry(requested, false, VertDelimKind::Sized, &options);
+            let expected_total = (2.0 + repeats) * piece * KATEX_SIZED_DELIM_SCALE;
+            assert!((geometry.height + geometry.depth - expected_total).abs() < 1e-9);
+            assert!(
+                (geometry.height
+                    - geometry.depth
+                    - 2.0 * options.metrics().axis_height * KATEX_SIZED_DELIM_SCALE)
+                    .abs()
+                    < 1e-9
+            );
+        }
+    }
+
+    #[test]
+    fn stacked_vertical_bar_path_matches_box_bounds() {
+        let options = LayoutOptions::default();
+        let bar = make_vert_delim_box(2.4, false, VertDelimKind::Sized, &options);
+        let BoxContent::SvgPath { commands, .. } = &bar.content else {
+            panic!("stacked vertical bar must be a path");
+        };
+        let (min_y, max_y) = path_y_bounds(commands);
+        assert!((min_y + bar.height).abs() < 1e-9);
+        assert!((max_y - bar.depth).abs() < 1e-9);
+    }
+
+    #[test]
+    fn natural_vertical_bar_uses_main_regular_metrics() {
+        let options = LayoutOptions::default();
+        let bar = make_natural_vert_delim_box(false, &options);
+        let BoxContent::Glyph { font_id, char_code } = bar.content else {
+            panic!("natural vertical bar must be a glyph");
+        };
+        let metrics = get_char_metrics(FontId::MainRegular, 8739).unwrap();
+        assert_eq!(font_id, FontId::MainRegular);
+        assert_eq!(char_code, 8739);
+        assert_eq!(bar.width, metrics.width);
+        assert_eq!(bar.height, metrics.height);
+        assert_eq!(bar.depth, metrics.depth);
+    }
+}
+
+#[cfg(test)]
+mod shared_stretchy_geometry_tests {
+    use super::*;
+    use crate::to_display::to_display_list;
+    use ratex_parser::parser::parse;
+    use ratex_types::display_item::DisplayItem;
+
+    fn test_box(width: f64, height: f64, depth: f64) -> LayoutBox {
+        LayoutBox {
+            width,
+            height,
+            depth,
+            content: BoxContent::Empty,
+            color: Color::BLACK,
+        }
+    }
+
+    fn physical_multidot_dimensions(
+        style: MathStyle,
+        explicit_size_multiplier: f64,
+    ) -> (f64, f64, f64) {
+        let options = LayoutOptions::default()
+            .with_style(style)
+            .with_explicit_size_multiplier(explicit_size_multiplier);
+        let scale = options.size_multiplier() * options.explicit_size_multiplier;
+        let accent =
+            layout_multidot_accent(test_box(0.4 / scale, 0.4 / scale, 0.1 / scale), 3, &options);
+        let mark = match &accent.content {
+            BoxContent::Accent { accent, .. } => accent,
+            other => panic!("expected accent box, got {other:?}"),
+        };
+        (
+            mark.width * scale,
+            mark.height * scale,
+            accent.width * scale,
+        )
+    }
+
+    #[test]
+    fn multidot_marks_keep_normal_size_in_script_styles() {
+        let display = physical_multidot_dimensions(MathStyle::Display, 1.0);
+
+        for style in [MathStyle::Script, MathStyle::ScriptScript] {
+            let actual = physical_multidot_dimensions(style, 1.0);
+            assert!((actual.0 - display.0).abs() < 1e-9);
+            assert!((actual.1 - display.1).abs() < 1e-9);
+            assert!((actual.2 - display.2).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn multidot_marks_keep_normal_size_under_explicit_sizing() {
+        let normal = physical_multidot_dimensions(MathStyle::Display, 1.0);
+
+        for (style, explicit_size_multiplier) in [
+            (MathStyle::Display, 0.5),
+            (MathStyle::Display, 0.9),
+            (MathStyle::Display, 1.44),
+            (MathStyle::Display, 2.488),
+            (MathStyle::Script, 0.9),
+            (MathStyle::Script, 2.488),
+        ] {
+            let actual = physical_multidot_dimensions(style, explicit_size_multiplier);
+            assert!((actual.0 - normal.0).abs() < 1e-9);
+            assert!((actual.1 - normal.1).abs() < 1e-9);
+            assert!((actual.2 - normal.2).abs() < 1e-9);
+        }
+    }
+
+    fn rendered_multidot_path_dimensions(latex: &str) -> (f64, f64) {
+        let ast = parse(latex).unwrap();
+        let display = to_display_list(&layout(&ast, &LayoutOptions::default()));
+        let paths: Vec<&[PathCommand]> = display
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                DisplayItem::Path { commands, .. } => Some(commands.as_slice()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(paths.len(), 1, "{latex}");
+
+        let mut min_x = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        let mut include = |x: f64, y: f64| {
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        };
+        for command in paths[0] {
+            match command {
+                PathCommand::MoveTo { x, y } | PathCommand::LineTo { x, y } => include(*x, *y),
+                PathCommand::CubicTo {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    x,
+                    y,
+                } => {
+                    include(*x1, *y1);
+                    include(*x2, *y2);
+                    include(*x, *y);
+                }
+                PathCommand::QuadTo { x1, y1, x, y } => {
+                    include(*x1, *y1);
+                    include(*x, *y);
+                }
+                PathCommand::Close => {}
+            }
+        }
+        (max_x - min_x, max_y - min_y)
+    }
+
+    #[test]
+    fn multidot_explicit_size_commands_reset_the_rendered_mark_to_normal() {
+        let normal_triple = rendered_multidot_path_dimensions(r"\dddot{x}");
+        for latex in [
+            r"\tiny\dddot{x}",
+            r"\Large\dddot{x}",
+            r"\small x_{\dddot{y}}",
+        ] {
+            let actual = rendered_multidot_path_dimensions(latex);
+            assert!((actual.0 - normal_triple.0).abs() < 1e-9, "{latex}");
+            assert!((actual.1 - normal_triple.1).abs() < 1e-9, "{latex}");
+        }
+
+        let normal_quadruple = rendered_multidot_path_dimensions(r"\ddddot{x}");
+        for latex in [
+            r"\small\ddddot{x}",
+            r"\Huge\ddddot{x}",
+            r"\Huge x_{\ddddot{y}}",
+        ] {
+            let actual = rendered_multidot_path_dimensions(latex);
+            assert!((actual.0 - normal_quadruple.0).abs() < 1e-9, "{latex}");
+            assert!((actual.1 - normal_quadruple.1).abs() < 1e-9, "{latex}");
+        }
+    }
+
+    #[test]
+    fn nested_explicit_sizing_replaces_the_outer_multiplier() {
+        let normal = rendered_multidot_path_dimensions(r"\dddot{x}");
+        let actual = rendered_multidot_path_dimensions(r"\small{\Large\dddot{x}}");
+        assert!((actual.0 - normal.0).abs() < 1e-9);
+        assert!((actual.1 - normal.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn multidot_marks_keep_normal_size_in_combined_style_and_sizing() {
+        let display = physical_multidot_dimensions(MathStyle::Display, 1.0);
+        for (style, multiplier) in [
+            (MathStyle::Script, 0.5),
+            (MathStyle::ScriptScript, 0.9),
+            (MathStyle::Script, 1.44),
+            (MathStyle::ScriptScript, 2.488),
+        ] {
+            let actual = physical_multidot_dimensions(style, multiplier);
+            assert!((actual.0 - display.0).abs() < 1e-9);
+            assert!((actual.1 - display.1).abs() < 1e-9);
+            assert!((actual.2 - display.2).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn stretchy_specs_derive_clearance_from_font_rule_metrics() {
+        let options = LayoutOptions::default();
+        let rule = options.metrics().default_rule_thickness;
+
+        let widehat = StretchySpec::accent("\\widehat", false, &options);
+        assert_eq!(widehat.placement, StretchyPlacement::Above);
+        assert_eq!(widehat.gap, 0.0);
+
+        let utilde = StretchySpec::accent("\\utilde", true, &options);
+        assert_eq!(utilde.placement, StretchyPlacement::Below);
+        assert!((utilde.gap - 3.0 * rule).abs() < 1e-9);
+
+        let underbrace = StretchySpec::horizontal_brace(false, &options);
+        assert_eq!(underbrace.placement, StretchyPlacement::Below);
+        assert!((underbrace.gap - 2.5 * rule).abs() < 1e-9);
+    }
+
+    #[test]
+    fn overline_geometry_matches_katex_vlist_rule_units() {
+        let options = LayoutOptions::default();
+        let rule = options.metrics().default_rule_thickness;
+        let geometry = RuleGeometry::overline(&options);
+
+        assert_eq!(geometry.thickness, rule);
+        assert!((geometry.line_center_offset - 3.5 * rule).abs() < 1e-9);
+        assert!((geometry.total_extent - 5.0 * rule).abs() < 1e-9);
+    }
+}
+
+#[cfg(test)]
+mod shared_grid_geometry_tests {
+    use super::*;
+    use ratex_parser::parser::parse;
+
+    fn test_box(width: f64, height: f64, depth: f64) -> LayoutBox {
+        LayoutBox {
+            width,
+            height,
+            depth,
+            content: BoxContent::Empty,
+            color: Color::BLACK,
+        }
+    }
+
+    #[test]
+    fn grid_measurement_uses_column_maxima_and_row_ascent_depth() {
+        let cells = vec![
+            vec![test_box(1.0, 0.4, 0.1), test_box(0.5, 0.7, 0.0)],
+            vec![test_box(1.5, 0.3, 0.2), test_box(0.25, 0.2, 0.4)],
+        ];
+        let grid = GridMetrics::measure(&cells, 2, 0.6, 0.25);
+
+        assert_eq!(grid.col_widths, vec![1.5, 0.5]);
+        assert_eq!(grid.row_heights, vec![0.7, 0.6]);
+        assert_eq!(grid.row_depths, vec![0.25, 0.4]);
+    }
+
+    #[test]
+    fn grid_dimensions_share_one_axis_and_padding_model() {
+        let grid = GridMetrics {
+            col_widths: vec![1.0, 2.0],
+            row_heights: vec![0.7, 0.8],
+            row_depths: vec![0.3, 0.2],
+        };
+        let dimensions = grid.dimensions(&[0.5], 0.25, 0.1, 0.2);
+
+        assert!((dimensions.width - 3.8).abs() < 1e-9);
+        assert!((dimensions.total_height - 2.0).abs() < 1e-9);
+        assert!((dimensions.offset - 1.25).abs() < 1e-9);
+    }
+
+    fn cd_grid(latex: &str) -> (Vec<f64>, Vec<f64>) {
+        fn find_array(lbox: &LayoutBox) -> Option<(&[f64], &[f64])> {
+            match &lbox.content {
+                BoxContent::Array {
+                    col_widths,
+                    col_gaps,
+                    ..
+                } => Some((col_widths, col_gaps)),
+                BoxContent::HBox(children) => children.iter().find_map(find_array),
+                BoxContent::Scaled { body, .. } | BoxContent::RaiseBox { body, .. } => {
+                    find_array(body)
+                }
+                _ => None,
+            }
+        }
+
+        let ast = parse(latex).unwrap();
+        let lbox = layout(&ast, &LayoutOptions::default());
+        let (widths, gaps) = find_array(&lbox).expect("CD must produce an array layout");
+        (widths.to_vec(), gaps.to_vec())
+    }
+
+    fn assert_half_em_gaps(gaps: &[f64], latex: &str) {
+        assert!(!gaps.is_empty(), "{latex}");
+        assert!(
+            gaps.iter().all(|gap| (*gap - 0.5).abs() < 1e-9),
+            "{latex}: {gaps:?}"
+        );
+    }
+
+    #[test]
+    fn cd_arrow_labels_do_not_change_any_column_gap() {
+        let unlabeled = r"\begin{CD} A @>>> B @>>> C \\ D @>>> E @>>> F \end{CD}";
+        let labeled = r"\begin{CD} A @>f>g>> B @>>> C \\ D @>>> E @>>> F \end{CD}";
+        let (_, unlabeled_gaps) = cd_grid(unlabeled);
+        let (_, labeled_gaps) = cd_grid(labeled);
+
+        assert_eq!(unlabeled_gaps, labeled_gaps);
+        assert_half_em_gaps(&unlabeled_gaps, unlabeled);
+    }
+
+    #[test]
+    fn cd_object_width_crossing_two_em_does_not_reflow_column_gaps() {
+        let narrow = r"\begin{CD} \rule{1.99em}{0.1em} @>>> B \\ C @>>> D \end{CD}";
+        let wide = r"\begin{CD} \rule{2.01em}{0.1em} @>>> B \\ C @>>> D \end{CD}";
+        let (narrow_widths, narrow_gaps) = cd_grid(narrow);
+        let (wide_widths, wide_gaps) = cd_grid(wide);
+
+        assert!(narrow_widths[0] < 2.0, "{narrow_widths:?}");
+        assert!(wide_widths[0] > 2.0, "{wide_widths:?}");
+        assert_eq!(narrow_gaps, wide_gaps);
+        assert_half_em_gaps(&narrow_gaps, narrow);
+    }
+
+    #[test]
+    fn cd_column_gaps_are_always_half_an_em_for_matching_grid_structure() {
+        for latex in [
+            r"\begin{CD} A @>>> B \\ C @>>> D \end{CD}",
+            r"\begin{CD} A @= B \\ C @= D \end{CD}",
+            r"\begin{CD} A @>f>> B \\ C @>g>h>> D \end{CD}",
+            r"\begin{CD} A @>>> B @>>> C \\ D @>>> E @>>> F \end{CD}",
+        ] {
+            let (_, gaps) = cd_grid(latex);
+            assert_half_em_gaps(&gaps, latex);
+        }
+    }
+}
+
+#[cfg(test)]
+mod operator_limits_geometry_tests {
+    use super::*;
+    use ratex_parser::parser::parse;
+
+    #[test]
+    fn limits_kern_uses_scaled_script_metrics_without_magic_padding() {
+        let options = LayoutOptions::default();
+        let script = parse("x").unwrap().remove(0);
+        let base = LayoutBox {
+            width: 1.0,
+            height: 1.05,
+            depth: 0.55,
+            content: BoxContent::Empty,
+            color: Color::BLACK,
+        };
+
+        let result = layout_op_limits_inner(&base, Some(&script), None, 0.0, 0.0, true, &options);
+        let BoxContent::OpLimits {
+            sup,
+            sup_kern,
+            sup_scale,
+            ..
+        } = &result.content
+        else {
+            panic!("expected operator limits box");
+        };
+        let script_box = sup.as_ref().unwrap();
+        let expected = options
+            .metrics()
+            .big_op_spacing1
+            .max(options.metrics().big_op_spacing3 - script_box.depth * sup_scale);
+        assert!((*sup_kern - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn unicode_and_command_big_operators_have_identical_geometry() {
+        let options = LayoutOptions::default();
+        for (unicode, command) in [
+            ("∏_i", "\\prod_i"),
+            ("∑_i", "\\sum_i"),
+            ("⋀_i", "\\bigwedge_i"),
+            ("⋁_i", "\\bigvee_i"),
+            ("⋂_i", "\\bigcap_i"),
+            ("⋃_i", "\\bigcup_i"),
+            ("⨀_i", "\\bigodot_i"),
+            ("⨁_i", "\\bigoplus_i"),
+            ("⨂_i", "\\bigotimes_i"),
+        ] {
+            let unicode_box = layout(&parse(unicode).unwrap(), &options);
+            let command_box = layout(&parse(command).unwrap(), &options);
+            assert_eq!(unicode_box.width, command_box.width, "{unicode}");
+            assert_eq!(unicode_box.height, command_box.height, "{unicode}");
+            assert_eq!(unicode_box.depth, command_box.depth, "{unicode}");
+        }
+    }
+
+    #[test]
+    fn operatorname_limits_keep_the_base_upright() {
+        fn find_limits(layout_box: &LayoutBox) -> Option<&LayoutBox> {
+            match &layout_box.content {
+                BoxContent::OpLimits { .. } => Some(layout_box),
+                BoxContent::HBox(children) => children.iter().find_map(find_limits),
+                BoxContent::Scaled { body, .. } | BoxContent::RaiseBox { body, .. } => {
+                    find_limits(body)
+                }
+                _ => None,
+            }
+        }
+
+        fn glyph_fonts(layout_box: &LayoutBox, fonts: &mut Vec<FontId>) {
+            match &layout_box.content {
+                BoxContent::Glyph { font_id, .. } => fonts.push(*font_id),
+                BoxContent::HBox(children) => {
+                    for child in children {
+                        glyph_fonts(child, fonts);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let options = LayoutOptions::default();
+        let result = layout(
+            &parse("\\operatorname*{asin}\\limits_y x").unwrap(),
+            &options,
+        );
+        let limits = find_limits(&result).expect("operatorname must use limits");
+        let BoxContent::OpLimits { base, .. } = &limits.content else {
+            unreachable!();
+        };
+        let mut fonts = Vec::new();
+        glyph_fonts(base, &mut fonts);
+        assert_eq!(fonts, vec![FontId::MainRegular; 4]);
     }
 }
 

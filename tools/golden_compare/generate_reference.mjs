@@ -12,15 +12,40 @@
  * reference runs always register macros; do not rely on a second <script src="contrib/…"> alone.
  * KaTeX dist is resolved from tools/golden_compare/node_modules or tools/lexer_compare/node_modules.
  *
- * Requires KaTeX ≥ 0.16.42 (e.g. ^0.16.44 in package.json) so mathtools-style \\underbracket / \\overbracket
- * parse; older 0.16.x patch releases omit them and render as undefined control sequence.
+ * The reference implementation is intentionally fixed at KaTeX 0.16.45.
+ * Upgrade it only in a dedicated reference-baseline change.
  */
-import { readFileSync, writeFileSync, unlinkSync, mkdirSync, existsSync } from 'fs';
-import { dirname, join } from 'path';
+import {
+    readFileSync,
+    writeFileSync,
+    unlinkSync,
+    mkdirSync,
+    existsSync,
+    readdirSync,
+} from 'fs';
+import { createHash } from 'crypto';
+import { dirname, join, relative, resolve } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import puppeteer from 'puppeteer';
+import { PUPPETEER_REVISIONS } from 'puppeteer-core/internal/revisions.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(__dirname, '..', '..');
+const EXPECTED_KATEX_VERSION = '0.16.45';
+const VIEWPORT_DPR = 2;
+
+function sha256File(path) {
+    return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function fontHashes(fontDir) {
+    return Object.fromEntries(
+        readdirSync(fontDir)
+            .filter((name) => /\.(?:woff2?|ttf)$/i.test(name))
+            .sort()
+            .map((name) => [name, sha256File(join(fontDir, name))])
+    );
+}
 
 /** Read PNG width/height from IHDR (no extra deps). */
 function readPngSize(absPath) {
@@ -58,7 +83,17 @@ function resolveKatexDist() {
 async function main() {
     const rawArgs = process.argv.slice(2);
     const withMhchem = rawArgs.includes('--mhchem');
-    const args = rawArgs.filter((a) => a !== '--mhchem');
+    const manifestArg = rawArgs.indexOf('--manifest-out');
+    const manifestOutArg = manifestArg >= 0 ? rawArgs[manifestArg + 1] : null;
+    if (manifestArg >= 0 && !manifestOutArg) {
+        throw new Error('--manifest-out requires a path');
+    }
+    const args = rawArgs.filter(
+        (arg, index) =>
+            arg !== '--mhchem' &&
+            (manifestArg < 0 ||
+                (index !== manifestArg && index !== manifestArg + 1))
+    );
     const testCasesPath =
         args[0] || join(__dirname, '..', '..', 'tests', 'golden', 'test_cases.txt');
     const outputDir =
@@ -69,15 +104,39 @@ async function main() {
     const alignOutputDir = join(__dirname, '..', '..', 'tests', 'golden', 'output');
 
     const KATEX_DIST = resolveKatexDist();
+    const katexPackage = JSON.parse(
+        readFileSync(join(KATEX_DIST, '..', 'package.json'), 'utf8')
+    );
+    if (katexPackage.version !== EXPECTED_KATEX_VERSION) {
+        throw new Error(
+            `KaTeX ${EXPECTED_KATEX_VERSION} is required, but ${katexPackage.version} is installed. ` +
+                'Run npm ci in tools/golden_compare.'
+        );
+    }
+    const puppeteerPackage = JSON.parse(
+        readFileSync(join(__dirname, 'node_modules', 'puppeteer', 'package.json'), 'utf8')
+    );
     const fontPx = withMhchem ? 40 : 20;
+    const manifestOut = manifestOutArg || join(outputDir, 'reference-manifest.json');
 
     if (!existsSync(outputDir)) {
         mkdirSync(outputDir, { recursive: true });
     }
+    if (existsSync(manifestOut)) {
+        unlinkSync(manifestOut);
+    }
+    for (const name of readdirSync(outputDir)) {
+        if (/^\d{4,}\.png$/.test(name)) {
+            unlinkSync(join(outputDir, name));
+        }
+    }
 
     const lines = readFileSync(testCasesPath, 'utf8')
         .split('\n')
-        .filter(l => l.trim() && !l.trim().startsWith('#'));
+        .filter(l => {
+            const formula = l.trim();
+            return formula && !formula.startsWith('#') && !formula.startsWith('%');
+        });
 
     console.log(
         `Generating ${lines.length} reference PNGs (KaTeX + mhchem, ${fontPx}px)...`
@@ -95,7 +154,6 @@ async function main() {
     // room at the right and doesn't overlap the equation. The screenshot for
     // those cases clips to the union of .base + .tag bounds.
     const STAGE_WIDTH = 720;
-    const VIEWPORT_DPR = 2;
     const tempHtml = join(KATEX_DIST, '_golden_render.html');
     const html = `<!DOCTYPE html>
 <html>
@@ -133,6 +191,7 @@ body { margin: 0; padding: 0; background: white; }
         headless: true,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--allow-file-access-from-files'],
     });
+    const browserVersion = await browser.version();
 
     const page = await browser.newPage();
     await page.setViewport({
@@ -153,6 +212,7 @@ body { margin: 0; padding: 0; background: white; }
     let ok = 0;
     let errors = 0;
     let fontsChecked = false;
+    const records = [];
     for (let i = 0; i < lines.length; i++) {
         const expr = lines[i].trim();
         const idx = String(i + 1).padStart(4, '0');
@@ -169,8 +229,9 @@ body { margin: 0; padding: 0; background: white; }
                 if (outer) toRender = outer[1];
                 katex.render(toRender, el, {
                     displayMode: true,
-                    throwOnError: false,
+                    throwOnError: true,
                     trust: true,
+                    strict: false,
                 });
                 await document.fonts.ready;
                 return el.querySelector('.tag') !== null;
@@ -209,9 +270,22 @@ body { margin: 0; padding: 0; background: white; }
                         omitBackground: false,
                     });
                     ok++;
+                    records.push({
+                        index: i + 1,
+                        formula: expr,
+                        status: 'rendered',
+                        png: `${idx}.png`,
+                        sha256: sha256File(join(outputDir, `${idx}.png`)),
+                    });
                 } else {
                     console.error(`SKIP ${idx}: empty bounding box for "${expr}"`);
                     errors++;
+                    records.push({
+                        index: i + 1,
+                        formula: expr,
+                        status: 'render_error',
+                        reason: 'empty bounding box',
+                    });
                 }
             } else {
                 // Pass 2: block container, equation left-aligned (fleqn:true) so the
@@ -232,8 +306,9 @@ body { margin: 0; padding: 0; background: white; }
                     if (outer) toRender = outer[1];
                     katex.render(toRender, el, {
                         displayMode: true,
-                        throwOnError: false,
+                        throwOnError: true,
                         trust: true,
+                        strict: false,
                         fleqn: true,
                     });
                     let maxBaseR = 0;
@@ -276,8 +351,9 @@ body { margin: 0; padding: 0; background: white; }
                         if (outer) toRender = outer[1];
                         katex.render(toRender, el, {
                             displayMode: true,
-                            throwOnError: false,
+                            throwOnError: true,
                             trust: true,
+                            strict: false,
                             fleqn: true,
                         });
                         await document.fonts.ready;
@@ -294,9 +370,22 @@ body { margin: 0; padding: 0; background: white; }
                         omitBackground: false,
                     });
                     ok++;
+                    records.push({
+                        index: i + 1,
+                        formula: expr,
+                        status: 'rendered',
+                        png: `${idx}.png`,
+                        sha256: sha256File(join(outputDir, `${idx}.png`)),
+                    });
                 } else {
                     console.error(`SKIP ${idx}: empty bounding box for "${expr}"`);
                     errors++;
+                    records.push({
+                        index: i + 1,
+                        formula: expr,
+                        status: 'render_error',
+                        reason: 'empty bounding box',
+                    });
                 }
             }
 
@@ -306,6 +395,15 @@ body { margin: 0; padding: 0; background: white; }
         } catch (err) {
             console.error(`ERR  ${idx}: ${expr} — ${err.message}`);
             errors++;
+            records.push({
+                index: i + 1,
+                formula: expr,
+                status:
+                    err?.name === 'ParseError' || /parse error/i.test(err?.message || '')
+                        ? 'parse_error'
+                        : 'render_error',
+                reason: err?.message || String(err),
+            });
         }
     }
 
@@ -314,8 +412,30 @@ body { margin: 0; padding: 0; background: white; }
     // Clean up temp file
     try { unlinkSync(tempHtml); } catch (_) {}
 
+    const manifest = {
+        manifest_version: 1,
+        kind: 'katex-reference',
+        generated_at: new Date().toISOString(),
+        test_cases: relative(REPO_ROOT, resolve(testCasesPath)).replaceAll('\\', '/'),
+        test_cases_sha256: sha256File(testCasesPath),
+        case_count: lines.length,
+        katex_version: katexPackage.version,
+        puppeteer_version: puppeteerPackage.version,
+        chromium_revision: PUPPETEER_REVISIONS.chrome,
+        chromium_version: browserVersion,
+        dpr: VIEWPORT_DPR,
+        font_px: fontPx,
+        font_file_hashes: fontHashes(join(KATEX_DIST, 'fonts')),
+        cases: records,
+    };
+    writeFileSync(manifestOut, JSON.stringify(manifest, null, 2) + '\n');
+
     console.log(`\nDone: ${ok} OK, ${errors} errors out of ${lines.length} formulas`);
     console.log(`Reference PNGs saved to ${outputDir}/`);
+    console.log(`Reference manifest saved to ${manifestOut}`);
+    if (errors > 0) {
+        process.exitCode = 1;
+    }
 }
 
 main().catch(err => {
