@@ -104,13 +104,11 @@ const _formulaGroups = [
       ),
       FormulaEntry(
         name: 'Fourier Transform',
-        latex:
-            r'\hat{f}(\xi) = \int_{-\infty}^{\infty} f(x)\, e^{-2\pi i x \xi}\, dx',
+        latex: r'\hat{f}(\xi) = \int_{-\infty}^{\infty} f(x)\, e^{-2\pi i x \xi}\, dx',
       ),
       FormulaEntry(
         name: 'Residue Theorem',
-        latex:
-            r'\oint_\gamma f(z)\,dz = 2\pi i \sum_{k} \operatorname{Res}(f, a_k)',
+        latex: r'\oint_\gamma f(z)\,dz = 2\pi i \sum_{k} \operatorname{Res}(f, a_k)',
       ),
     ],
   ),
@@ -119,8 +117,7 @@ const _formulaGroups = [
     entries: [
       FormulaEntry(
         name: 'Determinant (3x3)',
-        latex:
-            r'\det\begin{pmatrix} a & b & c \\ d & e & f \\ g & h & i \end{pmatrix} = aei + bfg + cdh - ceg - bdi - afh',
+        latex: r'\det\begin{pmatrix} a & b & c \\ d & e & f \\ g & h & i \end{pmatrix} = aei + bfg + cdh - ceg - bdi - afh',
       ),
       FormulaEntry(
         name: 'Matrix Multiplication',
@@ -137,13 +134,11 @@ const _formulaGroups = [
     entries: [
       FormulaEntry(
         name: "Maxwell's Equations",
-        latex:
-            r'\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0} \\ \nabla \cdot \mathbf{B} = 0 \\ \nabla \times \mathbf{E} = -\frac{\partial\mathbf{B}}{\partial t} \\ \nabla \times \mathbf{B} = \mu_0\mathbf{J} + \mu_0\varepsilon_0\frac{\partial\mathbf{E}}{\partial t}',
+        latex: r'\nabla \cdot \mathbf{E} = \frac{\rho}{\varepsilon_0} \\ \nabla \cdot \mathbf{B} = 0 \\ \nabla \times \mathbf{E} = -\frac{\partial\mathbf{B}}{\partial t} \\ \nabla \times \mathbf{B} = \mu_0\mathbf{J} + \mu_0\varepsilon_0\frac{\partial\mathbf{E}}{\partial t}',
       ),
       FormulaEntry(
         name: 'Schrodinger Equation',
-        latex:
-            r'i\hbar\frac{\partial}{\partial t}\Psi(\mathbf{r},t) = \hat{H}\Psi(\mathbf{r},t)',
+        latex: r'i\hbar\frac{\partial}{\partial t}\Psi(\mathbf{r},t) = \hat{H}\Psi(\mathbf{r},t)',
       ),
       FormulaEntry(name: 'Mass-Energy Equivalence', latex: r'E = mc^2'),
     ],
@@ -268,9 +263,8 @@ class _DesktopDemoPageState extends State<DesktopDemoPage> {
                 const SizedBox(width: 8),
                 Text(
                   'Formulas',
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleSmall?.copyWith(color: cs.onSurfaceVariant),
+                  style: Theme.of(context).textTheme.titleSmall
+                      ?.copyWith(color: cs.onSurfaceVariant),
                 ),
               ],
             ),
@@ -382,9 +376,8 @@ class _DesktopDemoPageState extends State<DesktopDemoPage> {
               Expanded(
                 child: Text(
                   _currentName,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: Theme.of(context).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w600),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
