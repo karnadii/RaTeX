@@ -20,7 +20,8 @@ Widget buildInlineMath(
   double mathFontSize = 18,
   TextStyle? textStyle,
 }) {
-  final style = textStyle ??
+  final style =
+      textStyle ??
       const TextStyle(fontSize: 16, height: 1.8, color: Colors.black87);
 
   final parts = text.split('\$');
@@ -109,8 +110,7 @@ class _DemoPageState extends State<DemoPage> {
     (name: 'FTC', latex: r'\frac{d}{dx}\left[\int_a^x f(t)\,dt\right] = f(x)'),
     (
       name: "Stokes' theorem",
-      latex:
-          r'\oint_{\partial\Sigma} \mathbf{F}\cdot d\mathbf{r} = \iint_\Sigma (\nabla\times\mathbf{F})\cdot d\mathbf{S}',
+      latex: r'\oint_{\partial\Sigma} \mathbf{F}\cdot d\mathbf{r} = \iint_\Sigma (\nabla\times\mathbf{F})\cdot d\mathbf{S}',
     ),
     (name: 'CJK · 勾股定理', latex: r'\text{勾股定理：} a^2+b^2=c^2'),
     (
@@ -295,12 +295,9 @@ class _DemoPageState extends State<DemoPage> {
   }
 
   Widget _label(BuildContext context, String text) => Text(
-        text,
-        style: Theme.of(context)
-            .textTheme
-            .labelSmall
-            ?.copyWith(color: Colors.grey),
-      );
+    text,
+    style: Theme.of(context).textTheme.labelSmall?.copyWith(color: Colors.grey),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -318,13 +315,11 @@ class _ShowcaseCard extends StatelessWidget {
     ),
     (
       label: '3D rotation matrix',
-      latex:
-          r'R_z(\theta)=\begin{pmatrix}\cos\theta&-\sin\theta&0\\\sin\theta&\cos\theta&0\\0&0&1\end{pmatrix}',
+      latex: r'R_z(\theta)=\begin{pmatrix}\cos\theta&-\sin\theta&0\\\sin\theta&\cos\theta&0\\0&0&1\end{pmatrix}',
     ),
     (
       label: 'Schrödinger equation',
-      latex:
-          r'i\hbar\frac{\partial}{\partial t}\Psi = \left[-\frac{\hbar^2}{2m}\nabla^2 + V\right]\Psi',
+      latex: r'i\hbar\frac{\partial}{\partial t}\Psi = \left[-\frac{\hbar^2}{2m}\nabla^2 + V\right]\Psi',
     ),
     (
       label: r'Residue theorem · \operatorname',
@@ -343,9 +338,8 @@ class _ShowcaseCard extends StatelessWidget {
             // Inline layout — multiple rows showing text-before + formula + text-after
             Text(
               'Inline layout · baseline alignment',
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(color: Colors.grey),
+              style: Theme.of(context).textTheme.labelSmall
+                  ?.copyWith(color: Colors.grey),
             ),
             const SizedBox(height: 6),
             buildInlineMath(
@@ -377,9 +371,8 @@ class _ShowcaseCard extends StatelessWidget {
               const Divider(height: 24),
               Text(
                 item.label,
-                style: Theme.of(
-                  context,
-                ).textTheme.labelSmall?.copyWith(color: Colors.grey),
+                style: Theme.of(context).textTheme.labelSmall
+                    ?.copyWith(color: Colors.grey),
               ),
               const SizedBox(height: 8),
               Center(
@@ -410,14 +403,13 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Text(
-          title,
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                color: Theme.of(context).colorScheme.primary,
-              ),
-        ),
-      );
+    padding: const EdgeInsets.only(bottom: 8),
+    child: Text(
+      title,
+      style: Theme.of(context).textTheme.titleSmall
+          ?.copyWith(color: Theme.of(context).colorScheme.primary),
+    ),
+  );
 }
 
 class _FormulaCard extends StatelessWidget {
