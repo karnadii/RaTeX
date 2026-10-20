@@ -128,21 +128,66 @@ class RaTeXPainter extends CustomPainter {
       return (family: null, weight: FontWeight.normal, style: FontStyle.normal);
     }
 
-    // fontId examples: "Math-Italic", "Main-Bold", "Main-BoldItalic",
-    //                  "AMS-Regular", "Size1-Regular"
-    // Family prefix is everything before the first '-'.
-    final dash = fontId.indexOf('-');
-    final prefix = dash >= 0 ? fontId.substring(0, dash) : fontId;
-    final suffix = dash >= 0 ? fontId.substring(dash + 1) : 'Regular';
-
-    final family = 'KaTeX_$prefix';
-    final weight =
-        suffix.contains('Bold') ? FontWeight.bold : FontWeight.normal;
-    final style =
-        suffix.contains('Italic') ? FontStyle.italic : FontStyle.normal;
-
-    return (family: family, weight: weight, style: style);
+    // Every KaTeX font FILE gets its own family name, and the file is
+    // requested with a NORMAL weight/style.
+    //
+    // Two reasons, both of which bit in the wild:
+    //
+    //  1. KaTeX's italic and bold faces bake the slant/weight into the glyph
+    //     OUTLINES but leave the file internally flagged "Regular" (italicAngle
+    //     0, no italic/bold bits). Asking for "KaTeX_Main" + italic makes the
+    //     engine add a SYNTHETIC oblique on top of the already-slanted
+    //     outlines — a visible double slant versus KaTeX's own rendering.
+    //  2. `ui.ParagraphBuilder` takes a `ui.TextStyle`, which has no
+    //     `package:` field, so the family name must be the one the asset
+    //     manifest registers. A plugin's fonts are registered under
+    //     `packages/<package name>/<family>` — the bare family name
+    //     ("KaTeX_Main") only resolves if the *app* re-declares the fonts,
+    //     which every consumer then has to remember to do. Without it the
+    //     engine silently falls back to a system serif and the formula
+    //     renders in the wrong typeface.
+    //
+    // So the family is the manifest key of the exact file, and the style is
+    // always normal: the file already carries the styling in its outlines.
+    final family = _fontFileFamilies[fontId];
+    if (family == null) {
+      // An unknown id: fall back to the system font rather than guessing.
+      return (family: null, weight: FontWeight.normal, style: FontStyle.normal);
+    }
+    return (
+      family: 'packages/ratex_flutter/$family',
+      weight: FontWeight.normal,
+      style: FontStyle.normal,
+    );
   }
+
+  /// Maps a display-list font id ("Math-Italic", "Main-Bold", ...) to the
+  /// KaTeX font FILE that draws it.
+  ///
+  /// The values are the family names declared in the plugin's pubspec — one
+  /// unique family per file, with no weight/style descriptors.
+  static const Map<String, String> _fontFileFamilies = <String, String>{
+    'Main-Regular': 'KaTeX_Main-Regular',
+    'Main-Bold': 'KaTeX_Main-Bold',
+    'Main-Italic': 'KaTeX_Main-Italic',
+    'Main-BoldItalic': 'KaTeX_Main-BoldItalic',
+    'Math-Italic': 'KaTeX_Math-Italic',
+    'Math-BoldItalic': 'KaTeX_Math-BoldItalic',
+    'AMS-Regular': 'KaTeX_AMS-Regular',
+    'SansSerif-Regular': 'KaTeX_SansSerif-Regular',
+    'SansSerif-Bold': 'KaTeX_SansSerif-Bold',
+    'SansSerif-Italic': 'KaTeX_SansSerif-Italic',
+    'Caligraphic-Regular': 'KaTeX_Caligraphic-Regular',
+    'Caligraphic-Bold': 'KaTeX_Caligraphic-Bold',
+    'Fraktur-Regular': 'KaTeX_Fraktur-Regular',
+    'Fraktur-Bold': 'KaTeX_Fraktur-Bold',
+    'Script-Regular': 'KaTeX_Script-Regular',
+    'Typewriter-Regular': 'KaTeX_Typewriter-Regular',
+    'Size1-Regular': 'KaTeX_Size1-Regular',
+    'Size2-Regular': 'KaTeX_Size2-Regular',
+    'Size3-Regular': 'KaTeX_Size3-Regular',
+    'Size4-Regular': 'KaTeX_Size4-Regular',
+  };
 
   void _drawGlyph(
     Canvas canvas,

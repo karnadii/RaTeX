@@ -59,69 +59,38 @@ Flutter versions earlier than 3.24 should continue using CocoaPods because they 
 
 #### Font setup
 
-Flutter requires host apps to explicitly declare fonts from plugin packages ([Flutter docs](https://docs.flutter.dev/cookbook/design/package-fonts#from-a-package)). Add the following to the `flutter:` section of your `pubspec.yaml`:
+**No host-app setup is required.** The plugin bundles the KaTeX fonts and
+registers each font *file* under its own family name, and `RaTeXPainter`
+asks for those families by their manifest key
+(`packages/ratex_flutter/<family>`).
+
+Older releases required the host app to re-declare the fonts in its
+`pubspec.yaml`:
 
 ```yaml
 flutter:
   fonts:
-    - family: KaTeX_AMS
-      fonts:
-        - asset: packages/ratex_flutter/fonts/KaTeX_AMS-Regular.ttf
-    - family: KaTeX_Caligraphic
-      fonts:
-        - asset: packages/ratex_flutter/fonts/KaTeX_Caligraphic-Regular.ttf
-        - asset: packages/ratex_flutter/fonts/KaTeX_Caligraphic-Bold.ttf
-          weight: 700
-    - family: KaTeX_Fraktur
-      fonts:
-        - asset: packages/ratex_flutter/fonts/KaTeX_Fraktur-Regular.ttf
-        - asset: packages/ratex_flutter/fonts/KaTeX_Fraktur-Bold.ttf
-          weight: 700
     - family: KaTeX_Main
       fonts:
         - asset: packages/ratex_flutter/fonts/KaTeX_Main-Regular.ttf
-        - asset: packages/ratex_flutter/fonts/KaTeX_Main-Bold.ttf
-          weight: 700
-        - asset: packages/ratex_flutter/fonts/KaTeX_Main-Italic.ttf
-          style: italic
-        - asset: packages/ratex_flutter/fonts/KaTeX_Main-BoldItalic.ttf
-          weight: 700
-          style: italic
-    - family: KaTeX_Math
-      fonts:
-        - asset: packages/ratex_flutter/fonts/KaTeX_Math-Italic.ttf
-          style: italic
-        - asset: packages/ratex_flutter/fonts/KaTeX_Math-BoldItalic.ttf
-          weight: 700
-          style: italic
-    - family: KaTeX_SansSerif
-      fonts:
-        - asset: packages/ratex_flutter/fonts/KaTeX_SansSerif-Regular.ttf
-        - asset: packages/ratex_flutter/fonts/KaTeX_SansSerif-Bold.ttf
-          weight: 700
-        - asset: packages/ratex_flutter/fonts/KaTeX_SansSerif-Italic.ttf
-          style: italic
-    - family: KaTeX_Script
-      fonts:
-        - asset: packages/ratex_flutter/fonts/KaTeX_Script-Regular.ttf
-    - family: KaTeX_Typewriter
-      fonts:
-        - asset: packages/ratex_flutter/fonts/KaTeX_Typewriter-Regular.ttf
-    - family: KaTeX_Size1
-      fonts:
-        - asset: packages/ratex_flutter/fonts/KaTeX_Size1-Regular.ttf
-    - family: KaTeX_Size2
-      fonts:
-        - asset: packages/ratex_flutter/fonts/KaTeX_Size2-Regular.ttf
-    - family: KaTeX_Size3
-      fonts:
-        - asset: packages/ratex_flutter/fonts/KaTeX_Size3-Regular.ttf
-    - family: KaTeX_Size4
-      fonts:
-        - asset: packages/ratex_flutter/fonts/KaTeX_Size4-Regular.ttf
+        # ...
 ```
 
-Without this step, `RaTeXPainter` silently falls back to the system font and formulas render incorrectly.
+That workaround had two problems, both fixed here:
+
+1. Flutter registers a plugin's fonts under the package-namespaced name
+   (`packages/ratex_flutter/KaTeX_Main`), so the bare family name only
+   resolved if the host app re-declared the fonts. Without that step
+   `RaTeXPainter` silently fell back to the system serif and formulas
+   rendered in the wrong typeface.
+2. Requesting a group family with `style: italic` made the engine add a
+   *synthetic* oblique on top of KaTeX's italic faces — which bake the
+   slant into their outlines and are internally flagged "Regular" — so the
+   glyphs came out double-slanted.
+
+The plugin now declares one family per font file and requests the exact
+file with a normal weight/style, which is what KaTeX's own rendering
+does.
 
 ### From local path (development)
 
