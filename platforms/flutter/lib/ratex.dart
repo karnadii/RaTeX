@@ -11,11 +11,6 @@ import 'src/ratex_painter.dart';
 
 export 'src/display_list.dart';
 export 'src/ratex_exception.dart';
-// The painter is public API by its own docs ("A [CustomPainter] that
-// renders a pre-parsed [DisplayList]"). Exporting it lets a caller
-// draw a formula it parsed itself — the golden parity harness does
-// exactly that, and the widget is otherwise the only entry point.
-export 'src/ratex_painter.dart';
 
 /// Process-scoped LRU cache for parsed-and-laid-out [DisplayList]s.
 /// Keyed on `(latex, fontSize, displayMode, maxWidthEm)` — color is intentionally
